@@ -102,7 +102,15 @@ pm2 delete jackettio 2>/dev/null || true
 pm2 start ecosystem.config.js
 
 # Configurar PM2 para auto-inicio en reboot
-pm2 startup systemd -u ubuntu --hp /home/ubuntu
+echo -e "${YELLOW}⚙️  Configurando PM2 para inicio automático...${NC}"
+STARTUP_CMD=$(pm2 startup systemd -u ubuntu --hp /home/ubuntu | grep "sudo env")
+if [ -n "$STARTUP_CMD" ]; then
+    eval $STARTUP_CMD
+    echo -e "${GREEN}✅ PM2 configurado para inicio automático${NC}"
+else
+    echo -e "${RED}⚠️  No se pudo obtener comando de startup de PM2${NC}"
+fi
+
 pm2 save
 
 echo -e "${GREEN}✅ Jackettio iniciado con PM2${NC}"
