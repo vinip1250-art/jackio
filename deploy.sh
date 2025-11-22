@@ -103,12 +103,16 @@ pm2 start ecosystem.config.js
 
 # Configurar PM2 para auto-inicio en reboot
 echo -e "${YELLOW}⚙️  Configurando PM2 para inicio automático...${NC}"
-STARTUP_CMD=$(pm2 startup systemd -u ubuntu --hp /home/ubuntu | grep "sudo env")
+STARTUP_CMD=$(pm2 startup systemd -u ubuntu --hp /home/ubuntu 2>&1 | grep "sudo env" || true)
 if [ -n "$STARTUP_CMD" ]; then
-    eval $STARTUP_CMD
-    echo -e "${GREEN}✅ PM2 configurado para inicio automático${NC}"
+    if eval "$STARTUP_CMD"; then
+        echo -e "${GREEN}✅ PM2 configurado para inicio automático${NC}"
+    else
+        echo -e "${RED}⚠️  Error al ejecutar comando de startup de PM2${NC}"
+    fi
 else
     echo -e "${RED}⚠️  No se pudo obtener comando de startup de PM2${NC}"
+    echo -e "${YELLOW}Intenta ejecutar manualmente: pm2 startup${NC}"
 fi
 
 pm2 save
