@@ -23,7 +23,7 @@
         <h5 class="mt-4">Indexadores</h5>
         <div class="ps-2 border-start border-secondary-subtle">
           <div class="mb-3 alert alert-warning" v-if="indexers.length == 0">
-            No hay indexadores disponibles, la instancia de Jackett no parece estar configurada correctamente.
+            Não há indexadores disponíveis. Na instância do Jackett, parece que não está configurada corretamente.
           </div>
           <div class="mb-3" v-if="indexers.length >= 1 && !immulatableUserConfigKeys.includes('indexers')">
             <label>Indexadores habilitados:</label>
@@ -35,22 +35,22 @@
             </div>
           </div>
           <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('indexerTimeoutSec')">
-            <label>Tiempo de espera del indexador</label>
+            <label>Tempo de espera do indexador</label>
             <input type="number" v-model="form.indexerTimeoutSec" min="6" max="120" class="form-control">
-            <small class="text-muted">Tiempo máximo de ejecución en segundos antes del timeout.</small>
+            <small class="text-muted">Tempo máximo de execução em segundos antes do tempo limite.</small>
           </div>
           <div class="mb-3" v-if="passkey && passkey.enabled">
-            <label>Passkey del indexador privado <i>(Recomendado)</i></label>
+            <label>Chave de acesso do indexador privado <i>(Recomendado)</i></label>
             <small v-if="passkey.infoUrl" class="ms-2"><a :href="passkey.infoUrl" target="_blank" rel="noreferrer">Obtener aquí</a></small>
             <input type="text" v-model="form.passkey" class="form-control" :pattern="passkey.pattern">
-            <small class="text-muted">Con el Passkey puedes transmitir torrents en caché y sin caché, sin el Passkey solo puedes transmitir torrents en caché.</small>
+            <small class="text-muted">Com a chave de acesso você Pode transmitir torrents em cache e sem cache; sem ou Passkey, apenas torrents em cache.</small>
           </div>
         </div>
 
-        <h5 class="mt-4">Filtros y Ordenamiento</h5>
+        <h5 class="mt-4">Filtros e Ordenação</h5>
         <div class="ps-2 border-start border-secondary-subtle">
           <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('qualities')">
-            <label>Calidades:</label>
+            <label>Qualidades:</label>
             <div class="d-flex flex-wrap">
               <div v-for="quality in qualities" class="me-3">
                 <input class="form-check-input me-1" type="checkbox" v-model="quality.checked" :id="quality.label">
@@ -59,7 +59,7 @@
             </div>
           </div>
           <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('excludeKeywords')">
-            <label>Excluir palabras clave en el nombre del torrent</label>
+            <label>Excluir palavras-chave do nome do torrent</label>
             <input type="text" v-model="form.excludeKeywords" placeholder="palabra1,palabra2" class="form-control">
             <small class="text-muted">Ejemplo: cam,xvid</small>
           </div>
@@ -67,44 +67,44 @@
             <div class="form-check form-switch">
               <input class="form-check-input me-1" type="checkbox" v-model="form.hideUncached" id="hideUncached">
               <label for="hideUncached" class="d-flex flex-column">
-                <span>Mostrar solo torrents en caché</span>
+                <span>Mostrar apenas torrents em cache</span>
               </label>
             </div>
           </div>
           <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('sortCached')">
-            <label>Ordenamiento de torrents en caché</label>
+            <label>Ordenando torrents em cache</label>
             <select v-model="form.sortCached" class="form-select">
               <option v-for="sort in sorts" :value="sort.value">{{sort.label}}</option>
             </select>
           </div>
           <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('sortUncached') && !form.hideUncached">
-            <label>Ordenamiento de torrents sin caché</label>
+            <label>Ordenando torrents sem cache</label>
             <select v-model="form.sortUncached" class="form-select">
               <option v-for="sort in sorts" :value="sort.value">{{sort.label}}</option>
             </select>
           </div>
           <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('maxTorrents')">
-            <label>Máximo de torrents en búsqueda</label>
+            <label>Número máximo de torrents pesquisados</label>
             <input type="number" v-model="form.maxTorrents" min="1" max="30" class="form-control">
             <small class="text-muted">Un número alto puede ralentizar significativamente la solicitud</small>
           </div>
           <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('priotizePackTorrents')">
-            <label>Forzar inclusión de <small>n</small> packs de series en búsqueda</label>
+            <label>Forçar a inclusão de <small>n</small> pacotes de séries na pesquisa</label>
             <input type="number" v-model="form.priotizePackTorrents" min="1" max="30" class="form-control">
-            <small class="text-muted">Esto podría aumentar la probabilidad de torrents en caché. 2 es un buen número</small>
+            <small class="text-muted">Isso pode aumentar a probabilidade de torrents em cache. 2 é um bom número</small>
           </div>
           <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('priotizeLanguages')">
-            <label>Priorizar idiomas de audio</label>
+            <label>Priorizar idiomas de áudio</label>
             <select v-model="form.priotizeLanguages" class="form-select" multiple>
               <option v-for="language in languages" :value="language.value">{{language.label}}</option>
             </select>
           </div>
           <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('metaLanguage') && metaLanguages.length > 0">
-            <label>Idiomas de búsqueda</label>
+            <label>Pesquisar idiomas</label>
             <select v-model="form.metaLanguage" class="form-select">
               <option v-for="metaLanguage in metaLanguages" :value="metaLanguage.value">{{metaLanguage.label}}</option>
             </select>
-            <small class="text-muted">Por defecto, la búsqueda usa el título original y funciona en la mayoría de casos, pero puedes forzar la búsqueda a usar un idioma específico.</small>
+            <small class="text-muted">Por padrão, a pesquisa usa o título original e funciona na maioria dos casos, mas você pode forçar a pesquisa a usar um idioma específico.</small>
           </div>
         </div>
 
@@ -114,8 +114,8 @@
             <div class="form-check form-switch">
               <input class="form-check-input me-1" type="checkbox" v-model="form.forceCacheNextEpisode" id="forceCacheNextEpisode">
               <label for="forceCacheNextEpisode" class="d-flex flex-column">
-                <span>Preparar el siguiente episodio. (Recomendado)</span>
-                <small class="text-muted">Añade automáticamente el siguiente episodio cuando no esté disponible para transmitirlo instantáneamente después.</small>
+                <span>Prepare o próximo episódio. (Recomendado)</span>
+                <small class="text-muted">Adiciona automaticamente o próximo episódio quando ele não estiver disponível para streaming imediato.</small>
               </label>
             </div>
           </div>
@@ -143,7 +143,7 @@
           <div v-if="form.enableMediaFlow">
             <div class="mb-2">
               <a href="https://github.com/mhdzumair/mediaflow-proxy?tab=readme-ov-file#mediaflow-proxy" target="_blank" rel="noopener">
-                Guía de configuración de MediaFlow
+                Guia de Configuração do MediaFlow
               </a>
             </div>
             <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('mediaflowProxyUrl')">
@@ -151,7 +151,7 @@
               <input type="text" v-model="form.mediaflowProxyUrl" class="form-control" id="mediaflowProxyUrl" placeholder="https://tu-mediaflow-proxy-url.com">
             </div>
             <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('mediaflowApiPassword')">
-              <label for="mediaflowApiPassword">Contraseña API de MediaFlow:</label>
+              <label for="mediaflowApiPassword">Senha da API do MediaFlow:</label>
               <div class="input-group">
                 <input :type="showMediaFlowPassword ? 'text' : 'password'" v-model="form.mediaflowApiPassword" class="form-control" id="mediaflowApiPassword">
                 <button class="btn btn-outline-secondary" type="button" @click="toggleMediaFlowPassword">
@@ -170,7 +170,7 @@
               <label for="mediaflowPublicIp">IP Pública de MediaFlow (Opcional):</label>
               <input type="text" v-model="form.mediaflowPublicIp" class="form-control" id="mediaflowPublicIp" placeholder="Ingresa la dirección IP pública">
               <small class="text-muted">
-                Configura esto solo cuando ejecutes MediaFlow localmente con un servicio proxy. Déjalo vacío si MediaFlow está configurado localmente sin servidor proxy o si está alojado en un servidor remoto.
+                Configure esta opção somente se o MediaFlow estiver sendo executado localmente com um serviço proxy. Deixe em branco se o MediaFlow estiver configurado localmente sem um servidor proxy ou se estiver hospedado em um servidor remoto.
               </small>
             </div>
           </div>
@@ -184,7 +184,7 @@
             <h6 class="text-success">✓ Configuración generada exitosamente</h6>
             <div class="d-flex flex-column gap-2 mt-2">
               <a :href="manifestUrl" class="btn btn-success">
-                🚀 Instalar en Stremio (Clic Directo)
+                🚀 Instalar no Stremio (Clique direto)
               </a>
               <div class="input-group">
                 <input type="text" :value="httpManifestUrl" class="form-control" readonly id="addonUrl">
@@ -193,7 +193,7 @@
                 </button>
               </div>
               <small class="text-muted">
-                Puedes instalar directamente con el botón verde o copiar la URL para instalarla manualmente en Stremio.
+                Você pode instalá-lo diretamente com o botão verde ou copiar o URL para instalá-lo manualmente no Stremio.
               </small>
             </div>
           </div>
