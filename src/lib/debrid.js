@@ -3,16 +3,26 @@ import alldebrid from "./debrid/alldebrid.js";
 import realdebrid from './debrid/realdebrid.js';
 import premiumize from './debrid/premiumize.js';
 import torrserver from './debrid/torrserver.js';
-import { Torbox } from './debrid/torbox.js';
-import { Hybrid } from './debrid/hybrid.js';
+// Importações corrigidas (sem chaves, pois agora são export default):
+import torbox from './debrid/torbox.js'; 
+import hybrid from './debrid/hybrid.js'; 
+
 export {ERROR} from './debrid/const.js';
 
-const debrid = {debridlink, alldebrid, realdebrid, premiumize, torrserver, torbox, hibrid};
+// Corrigido "hibrid" para "hybrid" e adicionado "torbox"
+const debrid = {
+  debridlink, 
+  alldebrid, 
+  realdebrid, 
+  premiumize, 
+  torrserver, 
+  torbox, 
+  hybrid 
+};
 
 export function instance(userConfig){
-
   if(!debrid[userConfig.debridId]){
-    throw new Error(`Debrid service "${userConfig.debridId} not exists`);
+    throw new Error(`Debrid service "${userConfig.debridId}" not exists`);
   }
   
   return new debrid[userConfig.debridId](userConfig);

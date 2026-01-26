@@ -93,7 +93,12 @@ async function getTorrents(userConfig, metaInfos, debridInstance){
 
   try {
 
-    const {qualities, excludeKeywords, maxTorrents, sortCached, sortUncached, priotizePackTorrents, priotizeLanguages, indexerTimeoutSec} = userConfig;
+    let {qualities, excludeKeywords, maxTorrents, sortCached, sortUncached, priotizePackTorrents, priotizeLanguages, indexerTimeoutSec} = userConfig;
+
+// --- FORÇAR TIMEOUT (Em Segundos) ---
+indexerTimeoutSec = 4; 
+// Defina 4, 5, 10... o quanto quiser. 
+// Se o indexador não responder nesse tempo, ele é cortado.
     const {id, season, episode, type, stremioId, year} = metaInfos;
 
     let torrents = [];
@@ -135,66 +140,32 @@ async function getTorrents(userConfig, metaInfos, debridInstance){
     console.log(`${stremioId} : ${indexers.length} indexers selected : ${indexers.map(indexer => indexer.title).join(', ')}`);
 
     if(type == 'movie'){
-
       const promises = indexers.map(indexer => timeoutIndexerSearch(indexer.id, jackett.searchMovieTorrents({...metaInfos, indexer: indexer.id}), indexerTimeoutSec*1000));
       torrents = [].concat(...(await Promise.all(promises)));
-
-      console.log(`${stremioId} : ${torrents.length} torrents found in ${(new Date() - startDate) / 1000}s`);
-
-      const yearTorrents = torrents.filter(filterYear);
-      if(yearTorrents.length)torrents = yearTorrents;
-      torrents = torrents.filter(filterSearch).sort(sortBy(...sortSearch));
-      torrents = priotizeItems(torrents, filterLanguage, Math.max(1, Math.round(maxTorrents * 0.33)));
-      torrents = torrents.slice(0, maxTorrents + 2);
-
     }else if(type == 'series'){
-
       const episodesPromises = indexers.map(indexer => timeoutIndexerSearch(indexer.id, jackett.searchEpisodeTorrents({...metaInfos, indexer: indexer.id}), indexerTimeoutSec*1000));
-      // const packsPromises = indexers.map(indexer => promiseTimeout(jackett.searchSeasonTorrents({...metaInfos, indexer: indexer.id}), indexerTimeoutSec*1000).catch(err => []));
       const packsPromises = indexers.map(indexer => timeoutIndexerSearch(indexer.id, jackett.searchSerieTorrents({...metaInfos, indexer: indexer.id}), indexerTimeoutSec*1000));
-
       const episodesTorrents = [].concat(...(await Promise.all(episodesPromises))).filter(filterSearch);
-      // const packsTorrents = [].concat(...(await Promise.all(packsPromises))).filter(torrent => filterSearch(torrent) && parseWords(torrent.name.toUpperCase()).includes(`S${numberPad(season)}`));
       const packsTorrents = [].concat(...(await Promise.all(packsPromises))).filter(torrent => {
         if(!filterSearch(torrent))return false;
         const words = parseWords(torrent.name.toLowerCase());
         const wordsStr = words.join(' ');
-        if(
-          // Season x
-          wordsStr.includes(`season ${season}`)
-          // SXX
-          || words.includes(`s${numberPad(season)}`)
-        ){
-          return true;
-        }
-        // From SXX to SXX
+        if(wordsStr.includes(`season ${season}`) || words.includes(`s${numberPad(season)}`)) return true;
         const range = wordsStr.match(/s([\d]{2,}) s([\d]{2,})/);
-        if(range && season >= parseInt(range[1]) && season <= parseInt(range[2])){
-          return true;
-        }
-        // Complete without season number (serie pack)
-        if(words.includes('complete') && !wordsStr.match(/ (s[\d]{2,}|season [\d]) /)){
-          return true;
-        }
+        if(range && season >= parseInt(range[1]) && season <= parseInt(range[2])) return true;
+        if(words.includes('complete') && !wordsStr.match(/ (s[\d]{2,}|season [\d]) /)) return true;
         return false;
       });
-
       torrents = [].concat(episodesTorrents, packsTorrents);
-
-      console.log(`${stremioId} : ${torrents.length} torrents found in ${(new Date() - startDate) / 1000}s`);
-
-      const yearTorrents = torrents.filter(filterYear);
-      if(yearTorrents.length)torrents = yearTorrents;
-      torrents = torrents.filter(filterSearch).sort(sortBy(...sortSearch));
-      torrents = priotizeItems(torrents, filterLanguage, Math.max(1, Math.round(maxTorrents * 0.33)));
-      torrents = torrents.slice(0, maxTorrents + 2);
-
-      if(priotizePackTorrents > 0 && packsTorrents.length && !torrents.find(t => packsTorrents.includes(t))){
-        const bestPackTorrents = packsTorrents.slice(0, Math.min(packsTorrents.length, priotizePackTorrents));
-        torrents.splice(bestPackTorrents.length * -1, bestPackTorrents.length, ...bestPackTorrents);
-      }
-
     }
+
+    console.log(`${stremioId} : ${torrents.length} torrents found in ${(new Date() - startDate) / 1000}s`);
+
+    const yearTorrents = torrents.filter(filterYear);
+    if(yearTorrents.length) torrents = yearTorrents;
+    torrents = torrents.filter(filterSearch).sort(sortBy(...sortSearch));
+    torrents = priotizeItems(torrents, filterLanguage, Math.max(1, Math.round(maxTorrents * 0.33)));
+    torrents = torrents.slice(0, maxTorrents + 2);
 
     console.log(`${stremioId} : ${torrents.length} torrents filtered, get torrents infos ...`);
     startDate = new Date();
@@ -205,13 +176,15 @@ async function getTorrents(userConfig, metaInfos, debridInstance){
         torrent.infos = await promiseTimeout(torrentInfos.get(torrent), Math.min(30, indexerTimeoutSec)*1000);
         return torrent;
       }catch(err){
-        console.log(`${stremioId} Failed getting torrent infos for ${torrent.id} from indexer ${torrent.indexerId}`);
-        console.log(`${stremioId} ${torrent.link.replace(/apikey=[a-z0-9\-]+/, 'apikey=****')}`, err);
         return false;
       }
     })));
+    
     torrents = torrents.filter(torrent => torrent && torrent.infos)
-      .filter((torrent, index, items) => items.findIndex(t => t.infos.infoHash == torrent.infos.infoHash) === index)
+      .filter((torrent, index, items) => {
+        if (!torrent.infos.infoHash) return true;
+        return items.findIndex(t => t.infos.infoHash == torrent.infos.infoHash) === index;
+      })
       .slice(0, maxTorrents);
 
     console.log(`${stremioId} : ${torrents.length} torrents infos found in ${(new Date() - startDate) / 1000}s`);
@@ -221,23 +194,24 @@ async function getTorrents(userConfig, metaInfos, debridInstance){
     }
 
     if(debridInstance){
-
       try {
-
         const isValidCachedFiles = type == 'series' ? files => !!searchEpisodeFile(files, season, episode) : files => true;
-        const cachedTorrents = (await debridInstance.getTorrentsCached(torrents, isValidCachedFiles)).map(torrent => {
+        const torrentsWithHash = torrents.filter(t => t.infos.infoHash);
+        const cachedTorrents = (await debridInstance.getTorrentsCached(torrentsWithHash, isValidCachedFiles)).map(torrent => {
           torrent.isCached = true;
           return torrent;
         });
-        const uncachedTorrents = torrents.filter(torrent => cachedTorrents.indexOf(torrent) === -1);
+        
+        let uncachedTorrents = torrents.filter(torrent => cachedTorrents.indexOf(torrent) === -1);
 
-        if(config.replacePasskey && !(userConfig.passkey && userConfig.passkey.match(new RegExp(config.replacePasskeyPattern)))){
-          uncachedTorrents.forEach(torrent => {
-            if(torrent.infos.private){
-              torrent.disabled = true;
-              torrent.infoText = 'Uncached torrent require a passkey configuration';
-            }
+        if (debridInstance.id == 'hybrid') {
+          const splitUncached = [];
+          uncachedTorrents.forEach(t => {
+            const originalId = t.id;
+            const rdClone = Object.assign({}, t); rdClone.infos = Object.assign({}, t.infos); rdClone.shortName = 'RD'; rdClone.id = `rd:${originalId}`; splitUncached.push(rdClone);
+            const tbClone = Object.assign({}, t); tbClone.infos = Object.assign({}, t.infos); tbClone.shortName = 'TB'; tbClone.id = `tb:${originalId}`; splitUncached.push(tbClone);
           });
+          uncachedTorrents = splitUncached;
         }
 
         console.log(`${stremioId} : ${cachedTorrents.length} cached torrents on ${debridInstance.shortName}`);
@@ -252,82 +226,44 @@ async function getTorrents(userConfig, metaInfos, debridInstance){
         torrents.forEach(torrent => torrent.progress = progress[torrent.infos.infoHash] || null);
 
       }catch(err){
-
         console.log(`${stremioId} : ${debridInstance.shortName} : ${err.message || err}`);
-
-        if(err.message == debrid.ERROR.EXPIRED_API_KEY){
-          torrents.forEach(torrent => {
-            torrent.disabled = true;
-            torrent.infoText = 'Unable to verify cache (+): Expired Debrid API Key.';
-          });
-        }
-
       }
-
     }
 
     return torrents;
-
   }finally{
-
     delete actionInProgress.getTorrents[metaInfos.stremioId];
-
   }
-
 }
 
 async function prepareNextEpisode(userConfig, metaInfos, debridInstance){
-
   try {
-
     const {stremioId} = metaInfos;
     const nextEpisodeIndex = metaInfos.episodes.findIndex(e => e.episode == metaInfos.episode && e.season == metaInfos.season) + 1;
     const nextEpisode = metaInfos.episodes[nextEpisodeIndex] || false;
-
     if(nextEpisode){
-
       metaInfos = await meta.getEpisodeById(metaInfos.id, nextEpisode.season, nextEpisode.episode, userConfig.metaLanguage);
       const torrents = await getTorrents(userConfig, metaInfos, debridInstance);
-
-      // Cache next episode on debrid when not cached
       if(userConfig.forceCacheNextEpisode && torrents.length && !torrents.find(torrent => torrent.isCached)){
-        console.log(`${stremioId} : Force cache next episode (${metaInfos.episode}) on debrid`);
         const bestTorrent = torrents.find(torrent => !torrent.disabled);
         if(bestTorrent)await getDebridFiles(userConfig, bestTorrent.infos, debridInstance);
       }
-
     }
-
-  }catch(err){
-
-    if(err.message != debrid.ERROR.NOT_READY){
-      console.log('cache next episode:', err);
-    }
-
-  }
-
+  }catch(err){}
 }
 
 async function getDebridFiles(userConfig, infos, debridInstance){
-
   if(infos.magnetUrl){
-
     return debridInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
-
   }else{
-
     let buffer = await torrentInfos.getTorrentFile(infos);
-
     if(config.replacePasskey){
-
       if(infos.private && !userConfig.passkey){
         return debridInstance.getFilesFromHash(infos.infoHash);
       }
-
       if(!userConfig.passkey.match(new RegExp(config.replacePasskeyPattern))){
-        throw new Error(`Invalid user passkey, pattern not match: ${config.replacePasskeyPattern}`);
+        throw new Error(`Invalid user passkey`);
       }
-
       const from = buffer.toString('binary');
       let to = from.replace(new RegExp(config.replacePasskey, 'g'), userConfig.passkey);
       const diffLength = from.length - to.length;
@@ -336,13 +272,9 @@ async function getDebridFiles(userConfig, infos, debridInstance){
         to = to.replace(announceLength[0], `:announce${parseInt(announceLength[1]) - diffLength}:`);
       }
       buffer = Buffer.from(to, 'binary');
-
     }
-
     return debridInstance.getFilesFromBuffer(buffer, infos.infoHash);
-
   }
-
 }
 
 function getFile(files, type, season, episode){
@@ -355,46 +287,70 @@ function getFile(files, type, season, episode){
 }
 
 export async function getStreams(userConfig, type, stremioId, publicUrl){
-
   userConfig = await mergeDefaultUserConfig(userConfig);
   const {id, season, episode} = parseStremioId(stremioId);
   const debridInstance = debrid.instance(userConfig);
-
   let metaInfos = await getMetaInfos(type, stremioId, userConfig.metaLanguage);
-
   const torrents = await getTorrents(userConfig, metaInfos, debridInstance);
-
-  // Prepare next expisode torrents list
   if(type == 'series'){
     prepareNextEpisode({...userConfig, forceCacheNextEpisode: false}, metaInfos, debridInstance);
   }
-
+  
+  // --- FORMATAÇÃO VISUAL ESTILO DEBRIDIO ---
   return torrents.map(torrent => {
     const file = getFile(torrent.infos.files || [], type, season, episode) || {};
     const quality = torrent.quality > 0 ? config.qualities.find(q => q.value == torrent.quality).label : '';
-    const rows = [torrent.name];
-    if(type == 'series' && file.name)rows.push(file.name);
-    if(torrent.infoText)rows.push(`ℹ️ ${torrent.infoText}`);
-    rows.push([`💾${bytesToSize(file.size || torrent.size)}`, `👥${torrent.seeders}`, `⚙️${torrent.indexerId}`, ...(torrent.languages || []).map(language => language.emoji)].join(' '));
-    if(torrent.progress && !torrent.isCached){
-      rows.push(`⬇️ ${torrent.progress.percent}% ${bytesToSize(torrent.progress.speed)}/s`);
-    }
+    
+    // Preparação dos dados extraídos
+    const d = torrent.details || { audio: [], video: [], other: [] };
+    const langs = (torrent.languages || []).map(l => `${l.emoji} ${l.value.toUpperCase()}`).join(' ');
+    
+    // Linha 1: Info Técnica
+    const size = `📂 ${bytesToSize(file.size || torrent.size)}`;
+    const seeds = `👤 ${torrent.seeders || 0}`;
+    const indexer = `⚙️ ${torrent.indexerId || 'Desconhecido'}`;
+    const cached = torrent.isCached ? '⚡' : '';
+    const row1 = [size, cached, seeds, indexer].filter(Boolean).join('  ');
+
+    // Linha 2: Tags e Metadados (Com verificação para não gerar strings vazias)
+    const audioStr = d.audio.length ? `🗣️ ${d.audio.join(' ')}` : '';
+    const videoStr = d.video.length ? `📺 ${d.video.join(' ')}` : '';
+    const otherStr = d.other.length ? `🧩 ${d.other.join(' ')}` : '';
+    
+    const row2Parts = [langs, audioStr, videoStr, otherStr].filter(Boolean);
+    const row2 = row2Parts.length > 0 ? row2Parts.join('  |  ') : '';
+
+    // Linha 3: Título do Arquivo
+    const row3 = file.name || torrent.name;
+
+    // Montagem final com quebra de linha
+    const titleLines = [row1, row2, row3].filter(Boolean).join('\n');
+
+    const serviceName = torrent.shortName || debridInstance.shortName;
+    const name = `[${serviceName}] Jackio ${quality}`;
+
     return {
-      name: `[${debridInstance.shortName}${torrent.isCached ? '+' : ''}] ${userConfig.enableMediaFlow ? '🕵🏼‍♂️ ' : ''}${config.addonName} ${quality}`,
-      title: rows.join("\n"),
+      name: name,
+      title: titleLines,
       url: torrent.disabled ? '#' : `${publicUrl}/${btoa(JSON.stringify(userConfig))}/download/${type}/${stremioId}/${torrent.id}/${file.name || torrent.name}`
     };
   });
-
 }
 
 export async function getDownload(userConfig, type, stremioId, torrentId){
-
   userConfig = await mergeDefaultUserConfig(userConfig);
   const debridInstance = debrid.instance(userConfig);
-  const infos = await torrentInfos.getById(torrentId);
+
+  let cleanId = torrentId;
+  if (cleanId.includes(':') && (cleanId.startsWith('rd:') || cleanId.startsWith('tb:') || cleanId.startsWith('hy:'))) {
+     const parts = cleanId.split(':');
+     if(parts.length > 1) cleanId = parts.slice(1).join(':');
+  }
+
+  const infos = await torrentInfos.getById(cleanId);
   const {id, season, episode} = parseStremioId(stremioId);
   const cacheKey = `download:2:${await debridInstance.getUserHash()}${userConfig.enableMediaFlow ? ':mfp': ''}:${stremioId}:${torrentId}`;
+  
   let files;
   let download;
   let waitMs = 0;
@@ -405,8 +361,6 @@ export async function getDownload(userConfig, type, stremioId, torrentId){
   actionInProgress.getDownload[cacheKey] = true;
 
   try {
-
-    // Prepare next expisode debrid cache
     if(type == 'series' && userConfig.forceCacheNextEpisode){
       getMetaInfos(type, stremioId, userConfig.metaLanguage).then(metaInfos => prepareNextEpisode(userConfig, metaInfos, debridInstance));
     }
@@ -415,10 +369,23 @@ export async function getDownload(userConfig, type, stremioId, torrentId){
     if(download)return download;
 
     console.log(`${stremioId} : ${debridInstance.shortName} : ${infos.infoHash} : get files ...`);
-    files = await getDebridFiles(userConfig, infos, debridInstance);
+    
+    if (debridInstance.id == 'hybrid' && torrentId.includes(':')) {
+        const prefix = torrentId.split(':')[0];
+        if (prefix === 'tb') {
+            files = await getDebridFiles(userConfig, infos, debridInstance.tb);
+            files = files.map(f => ({...f, id: `tb:${f.id}`}));
+        } else if (prefix === 'rd') {
+            files = await getDebridFiles(userConfig, infos, debridInstance.rd);
+            files = files.map(f => ({...f, id: `rd:${f.id}`}));
+        } else {
+            files = await getDebridFiles(userConfig, infos, debridInstance);
+        }
+    } else {
+        files = await getDebridFiles(userConfig, infos, debridInstance);
+    }
+
     console.log(`${stremioId} : ${debridInstance.shortName} : ${infos.infoHash} : ${files.length} files found`);
-
-
     download = await debridInstance.getDownload(getFile(files, type, season, episode));
 
     if(download){
@@ -426,13 +393,8 @@ export async function getDownload(userConfig, type, stremioId, torrentId){
       await cache.set(cacheKey, download, {ttl: 3600});
       return download;
     }
-
     throw new Error(`No download for type ${type} and ID ${torrentId}`);
-
   }finally{
-
     delete actionInProgress.getDownload[cacheKey];
-
   }
-
 }
