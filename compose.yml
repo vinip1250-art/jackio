@@ -1,0 +1,17 @@
+services:
+  jackettio:
+    image: jackettio-custom:latest
+    container_name: jackettio
+    restart: unless-stopped
+    networks:
+      - vpn-net
+    user: "1001:1001"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATA_FOLDER: /data
+    volumes:
+      - ./data:/data
+    ports:
+      - "4000:4000"
