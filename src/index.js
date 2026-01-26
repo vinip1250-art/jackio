@@ -19,6 +19,46 @@ const welcomeMessageHtml = config.welcomeMessage ? `${converter.makeHtml(config.
 const addon = JSON.parse(readFileSync(`./package.json`));
 const app = express();
 
+// --- INICIO DO BLOQUEIO POR SENHA (BASIC AUTH) ---
+app.use((req, res, next) => {
+  // 1. Se não tiver senha configurada no .env, libera tudo
+  if (!process.env.ACCESS_PASSWORD) return next();
+
+  // 2. Libera o acesso para o Stremio (Robôs)
+  // O Stremio acessa URLs longas (com a config em base64) ou rotas de stream/download.
+  // A página de config é sempre curta (/, /configure, /index.html)
+  if (
+    req.path.includes('/manifest.json') || 
+    req.path.startsWith('/stream') || 
+    req.path.startsWith('/download') ||
+    req.path.length > 64 // Configurações geradas tem URLs longas
+  ) {
+    return next();
+  }
+
+  // 3. Verifica arquivos estáticos essenciais (favicon, logo) se necessário
+  if (req.path.endsWith('.png') || req.path.endsWith('.jpg') || req.path.endsWith('.ico')) {
+    return next();
+  }
+
+  // 4. Lógica de Autenticação (Pop-up do Navegador)
+  const auth = { login: 'admin', password: process.env.ACCESS_PASSWORD };
+  
+  // Lê o cabeçalho de autorização
+  const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
+  const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
+
+  // Verifica se a senha bate (o usuário pode ser qualquer um, ou 'admin')
+  if (login && password && password === auth.password) {
+    return next();
+  }
+
+  // Se não tiver logado, manda o navegador pedir senha
+  res.set('WWW-Authenticate', 'Basic realm="Jackettio Protegido"');
+  res.status(401).send('<h1>Acesso Negado</h1><p>Você precisa da senha configurada no .env para acessar o gerador.</p>');
+});
+// --- FIM DO BLOQUEIO ---
+
 const respond = (res, data) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Headers', '*')
