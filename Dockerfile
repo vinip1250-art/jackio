@@ -1,18 +1,7 @@
-FROM node:20-slim
+FROM ghcr.io/linuxserver/jackett:latest
 
-RUN mkdir -p /home/node/app && chown -R node:node /home/node/app \
-  && mkdir -p /data && chown -R node:node /data
+# Copia sua versão modificada do JackettIO
+COPY src/ /app/
 
-WORKDIR /home/node/app
-
-COPY --chown=node:node package*.json ./
-
-USER node
-
-RUN npm install
-
-COPY --chown=node:node ./src ./src
-
-EXPOSE 5000
-
-CMD [ "node", "src/index.js" ]
+# Ajusta permissões (LinuxServer roda como abc:abc)
+RUN chown -R abc:abc /app
