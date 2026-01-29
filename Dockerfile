@@ -1,7 +1,12 @@
 FROM ghcr.io/linuxserver/jackett:latest
 
-# Copia sua versão modificada do JackettIO
-COPY src/ /app/
+# Instala git para clonar o repositório
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
-# Ajusta permissões (LinuxServer roda como abc:abc)
-RUN chown -R abc:abc /app
+# Clona seu repositório JackettIO
+RUN git clone https://github.com/vinip1250-art/jackio.git /tmp/jackio
+
+# Copia o código modificado para dentro da imagem
+RUN cp -r /tmp/jackio/src/* /app/ && \
+    chown -R abc:abc /app && \
+    rm -rf /tmp/jackio
