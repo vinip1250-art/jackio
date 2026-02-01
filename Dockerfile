@@ -1,12 +1,15 @@
-FROM ghcr.io/linuxserver/jackett:latest
+FROM node:18-alpine
 
-# Instala git para clonar o repositório
+WORKDIR /app
+
+# Instala git (Alpine)
 RUN apk add --no-cache git
 
-# Clona seu repositório JackettIO
-RUN git clone https://github.com/vinip1250-art/jackio.git /tmp/jackio
+COPY package*.json ./
+RUN npm install --production
 
-# Copia o código modificado para dentro da imagem
-RUN cp -r /tmp/jackio/src/* /app/ && \
-    chown -R abc:abc /app && \
-    rm -rf /tmp/jackio
+COPY . .
+
+EXPOSE 7000
+
+CMD ["npm", "start"]
