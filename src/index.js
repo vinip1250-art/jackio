@@ -321,7 +321,9 @@ const server = app.listen(config.port, async () => {
     tunnel.on('close', () => console.log("tunnels are closed"));
   }
 
-  icon.download().catch(err => console.log(`Failed to download icon: ${err}`));
+icon.getLocation().catch(err =>
+  console.log(`Failed to prepare icon: ${err}`)
+);
 
   const intervals = [];
   createTorrentFolder();
