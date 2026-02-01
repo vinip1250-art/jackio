@@ -321,10 +321,6 @@ const server = app.listen(config.port, async () => {
     tunnel.on('close', () => console.log("tunnels are closed"));
   }
 
-icon.getLocation().catch(err =>
-  console.log(`Failed to prepare icon: ${err}`)
-);
-
   const intervals = [];
   createTorrentFolder();
   intervals.push(setInterval(cleanTorrentFolder, 3600e3));
