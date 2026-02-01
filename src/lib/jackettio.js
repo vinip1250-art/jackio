@@ -8,6 +8,28 @@ import * as jackett from './jackett.js';
 import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
 
+function hasLanguage(torrent, langs) {
+  return torrent.languages?.some(l => langs.includes(l.value));
+}
+
+function classifyByLanguage(torrents, preferredLangs) {
+  const primary = [];
+  const fallback = [];
+  const others = [];
+
+  torrents.forEach(t => {
+    if (hasLanguage(t, preferredLangs)) {
+      primary.push(t);
+    } else if (hasLanguage(t, ['multi'])) {
+      fallback.push(t);
+    } else {
+      others.push(t);
+    }
+  });
+
+  return { primary, fallback, others };
+}
+
 const slowIndexers = {};
 
 const actionInProgress = {
@@ -164,6 +186,8 @@ indexerTimeoutSec = 4;
     const yearTorrents = torrents.filter(filterYear);
     if(yearTorrents.length) torrents = yearTorrents;
     torrents = torrents.filter(filterSearch).sort(sortBy(...sortSearch));
+    const preferredLanguages = userConfig.languages || [];
+    torrents = reorderByLanguage(torrents, preferredLanguages);
     torrents = priotizeItems(torrents, filterLanguage, Math.max(1, Math.round(maxTorrents * 0.33)));
     torrents = torrents.slice(0, maxTorrents + 2);
 
