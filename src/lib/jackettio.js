@@ -17,7 +17,7 @@ import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
 
 /* =========================================================
- * IDIOMA – PRIORIZAÇÃO (UPSTREAM-SAFE)
+ * IDIOMA – PRIORIZAÇÃO (UPSTREAM SAFE)
  * ======================================================= */
 
 function hasLanguage(torrent, langs) {
@@ -47,7 +47,10 @@ function reorderByLanguage(torrents, preferredLangs) {
 /* ========================================================= */
 
 const slowIndexers = {};
-const actionInProgress = { getTorrents: {}, getDownload: {} };
+const actionInProgress = {
+  getTorrents: {},
+  getDownload: {}
+};
 
 function parseStremioId(stremioId) {
   const [id, season, episode] = stremioId.split(':');
@@ -122,7 +125,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
 
     indexerTimeoutSec = 4;
 
-    const { type, stremioId, year, season, episode } = metaInfos;
+    const { type, stremioId, year } = metaInfos;
     console.log(`${stremioId} : searching torrents...`);
 
     const filterSearch = torrent => {
@@ -219,13 +222,18 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
 }
 
 /* =========================================================
- * STREAMS PARA O STREMIO
+ * STREAMS (FORMATAÇÃO STREMIO)
  * ======================================================= */
 
 function getFile(files, type, season, episode) {
   files = files.sort(sortBy('size', true));
   if (type === 'movie') return files[0];
   return searchEpisodeFile(files, season, episode) || files[0];
+}
+
+function detectBrazilianPortuguese(torrent, file) {
+  const haystack = `${torrent.name || ''} ${file?.name || ''}`.toLowerCase();
+  return /\b(pt-br|pt|por|pob|brazilian|dublado|nacional|bioma|multi[- ]?audio)\b/.test(haystack);
 }
 
 export async function getStreams(userConfig, type, stremioId, publicUrl) {
@@ -239,6 +247,7 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
 
   return torrents.map(torrent => {
     const file = getFile(torrent.infos.files || [], type, season, episode) || {};
+
     const quality =
       torrent.quality > 0
         ? config.qualities.find(q => q.value === torrent.quality)?.label || ''
@@ -247,35 +256,33 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
     const serviceName = torrent.shortName || debridInstance.shortName;
     const cachedSign = torrent.isCached ? '⚡' : '';
 
-    const languageBadges = (torrent.languages || [])
-      .map(l => l.emoji)
-      .join(' ');
+    const officialLangs = (torrent.languages || []).map(l => l.emoji);
+    const hasPtBrByName = detectBrazilianPortuguese(torrent, file);
+
+    const languageBadges = [
+      ...officialLangs,
+      ...(hasPtBrByName ? ['🇧🇷'] : [])
+    ].filter((v, i, a) => a.indexOf(v) === i).join(' ');
 
     const isArchive =
       torrent.infos.files?.length > 1 ||
       file.name?.match(/\.(zip|rar|7z)$/i);
 
-    const sizeLabel = isArchive
-      ? `📦 ${bytesToSize(
-          torrent.infos.files.reduce((s, f) => s + (f.size || 0), 0)
-        )}`
-      : `📂 ${bytesToSize(file.size || torrent.size)}`;
+    const sizeValue = isArchive
+      ? torrent.infos.files.reduce((s, f) => s + (f.size || 0), 0)
+      : (file.size || torrent.size);
+
+    const sizeLabel = `${isArchive ? '📦' : '📂'} ${bytesToSize(sizeValue)}`;
 
     const indexer = torrent.indexerName || torrent.indexerId || 'Unknown';
 
-    const row1 = [
-      sizeLabel,
-      `👤 ${torrent.seeders || 0}`,
-      `⚙️ ${indexer} ${languageBadges}`
-    ]
-      .filter(Boolean)
-      .join('  ');
-
-    const row2 = file.name || torrent.name;
+    const row1 = `${sizeLabel}  👤 ${torrent.seeders || 0}`;
+    const row2 = `⚙️ ${indexer}${languageBadges ? ' ' + languageBadges : ''}`;
+    const row3 = file.name || torrent.name;
 
     return {
       name: `[${serviceName}${cachedSign}] Jackio ${quality}`,
-      title: [row1, row2].filter(Boolean).join('\n'),
+      title: [row1, row2, row3].join('\n'),
       url: torrent.disabled
         ? '#'
         : `${publicUrl}/${btoa(
