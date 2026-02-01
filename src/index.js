@@ -3,67 +3,73 @@ import compression from 'compression';
 import express from 'express';
 import localtunnel from 'localtunnel';
 import { rateLimit } from 'express-rate-limit';
-import {readFileSync} from "fs";
-import config from './lib/config.js';
-import cache, {vacuum as vacuumCache, clean as cleanCache} from './lib/cache.js';
+import { readFileSync } from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+import config from './lib/config.js';
+import cache, { vacuum as vacuumCache, clean as cleanCache } from './lib/cache.js';
 import * as meta from './lib/meta.js';
 import * as icon from './lib/icon.js';
 import * as debrid from './lib/debrid.js';
-import {getIndexers} from './lib/jackett.js';
+import { getIndexers } from './lib/jackett.js';
 import * as jackettio from "./lib/jackettio.js";
-import {cleanTorrentFolder, createTorrentFolder} from './lib/torrentInfos.js';
+import { cleanTorrentFolder, createTorrentFolder } from './lib/torrentInfos.js';
+
+/**
+ * ==================================================
+ * CORREÇÃO OBRIGATÓRIA PARA ES MODULES (Node 18)
+ * ==================================================
+ */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+/**
+ * ==================================================
+ */
 
 const converter = new showdown.Converter();
-const welcomeMessageHtml = config.welcomeMessage ? `${converter.makeHtml(config.welcomeMessage)}<div class="my-4 border-top border-secondary-subtle"></div>` : '';
-const addon = JSON.parse(readFileSync(`./package.json`));
+const welcomeMessageHtml = config.welcomeMessage
+  ? `${converter.makeHtml(config.welcomeMessage)}<div class="my-4 border-top border-secondary-subtle"></div>`
+  : '';
+
+const addon = JSON.parse(readFileSync('./package.json'));
 const app = express();
 
 // --- INICIO DO BLOQUEIO POR SENHA (BASIC AUTH) ---
 app.use((req, res, next) => {
-  // 1. Se não tiver senha configurada no .env, libera tudo
   if (!process.env.ACCESS_PASSWORD) return next();
 
-  // 2. Libera o acesso para o Stremio (Robôs)
-  // O Stremio acessa URLs longas (com a config em base64) ou rotas de stream/download.
-  // A página de config é sempre curta (/, /configure, /index.html)
   if (
-    req.path.includes('/manifest.json') || 
-    req.path.startsWith('/stream') || 
+    req.path.includes('/manifest.json') ||
+    req.path.startsWith('/stream') ||
     req.path.startsWith('/download') ||
-    req.path.length > 64 // Configurações geradas tem URLs longas
+    req.path.length > 64
   ) {
     return next();
   }
 
-  // 3. Verifica arquivos estáticos essenciais (favicon, logo) se necessário
   if (req.path.endsWith('.png') || req.path.endsWith('.jpg') || req.path.endsWith('.ico')) {
     return next();
   }
 
-  // 4. Lógica de Autenticação (Pop-up do Navegador)
   const auth = { login: 'admin', password: process.env.ACCESS_PASSWORD };
-  
-  // Lê o cabeçalho de autorização
   const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
   const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
 
-  // Verifica se a senha bate (o usuário pode ser qualquer um, ou 'admin')
   if (login && password && password === auth.password) {
     return next();
   }
 
-  // Se não tiver logado, manda o navegador pedir senha
   res.set('WWW-Authenticate', 'Basic realm="Jackettio Protegido"');
   res.status(401).send('<h1>Acesso Negado</h1><p>Você precisa da senha configurada no .env para acessar o gerador.</p>');
 });
 // --- FIM DO BLOQUEIO ---
 
 const respond = (res, data) => {
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Headers', '*')
-  res.setHeader('Content-Type', 'application/json')
-  res.send(data)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Content-Type', 'application/json');
+  res.send(data);
 };
 
 const limiter = rateLimit({
@@ -73,14 +79,16 @@ const limiter = rateLimit({
   standardHeaders: 'draft-7',
   keyGenerator: (req) => req.clientIp || req.ip,
   handler: (req, res, next, options) => {
-    if(req.route.path == '/:userConfig/stream/:type/:id.json'){
+    if (req.route.path === '/:userConfig/stream/:type/:id.json') {
       const resetInMs = new Date(req.rateLimit.resetTime) - new Date();
-      return res.json({streams: [{
-        name: `${config.addonName}`,
-        title: `🛑 Too many requests, please try in ${Math.ceil(resetInMs / 1000 / 60)} minute(s).`,
-        url: '#'
-      }]})
-    }else{
+      return res.json({
+        streams: [{
+          name: `${config.addonName}`,
+          title: `🛑 Too many requests, please try in ${Math.ceil(resetInMs / 1000 / 60)} minute(s).`,
+          url: '#'
+        }]
+      });
+    } else {
       return res.status(options.statusCode).send(options.message);
     }
   }
@@ -89,25 +97,30 @@ const limiter = rateLimit({
 app.set('trust proxy', config.trustProxy);
 
 app.use((req, res, next) => {
-  req.clientIp = req.ip;
-  if(req.get('CF-Connecting-IP')){
-    req.clientIp = req.get('CF-Connecting-IP');
-  }
+  req.clientIp = req.get('CF-Connecting-IP') || req.ip;
   next();
 });
 
 app.use(compression());
-app.use(express.static(path.join(import.meta.dirname, 'static'), {maxAge: 86400e3}));
+
+/**
+ * ✅ CORREÇÃO APLICADA AQUI
+ */
+app.use(
+  express.static(
+    path.join(__dirname, 'static'),
+    { maxAge: 86400e3 }
+  )
+);
 
 app.get('/', (req, res) => {
-  res.redirect('/configure')
-  res.end();
+  res.redirect('/configure');
 });
 
 app.get('/icon', async (req, res) => {
   const filePath = await icon.getLocation();
   res.contentType(path.basename(filePath));
-  res.setHeader('Cache-Control', `public, max-age=${3600}`);
+  res.setHeader('Cache-Control', `public, max-age=3600`);
   return res.sendFile(filePath);
 });
 
