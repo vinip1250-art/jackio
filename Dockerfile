@@ -1,7 +1,7 @@
 FROM ghcr.io/linuxserver/jackett:latest
 
 # Instala git para clonar o repositório
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache git
 
 # Clona seu repositório JackettIO
 RUN git clone https://github.com/vinip1250-art/jackio.git /tmp/jackio
