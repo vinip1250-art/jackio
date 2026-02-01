@@ -117,11 +117,9 @@ app.get('/', (req, res) => {
   res.redirect('/configure');
 });
 
-app.get('/icon', async (req, res) => {
-  const filePath = await icon.getLocation();
-  res.contentType(path.basename(filePath));
-  res.setHeader('Cache-Control', `public, max-age=3600`);
-  return res.sendFile(filePath);
+app.get('/icon', (req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  return res.sendFile(icon.iconPath);
 });
 
 app.use((req, res, next) => {
