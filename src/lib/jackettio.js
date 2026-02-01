@@ -17,48 +17,59 @@ import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
 
 /* =========================================================
- * IDIOMA – PRIORIZAÇÃO (UPSTREAM SAFE)
- * ======================================================= */
+   🔤 NORMALIZAÇÃO + PRIORIZAÇÃO DE IDIOMA (UPSTREAM SAFE)
+   ========================================================= */
 
-function hasLanguage(torrent, langs) {
-  return torrent.languages?.some(l => langs.includes(l.value));
+const LANG_PATTERNS = {
+  ptbr: /\b(pt-br|ptbr|brazilian|brasileiro|dublado|nacional|por|pob|bioma)\b/i,
+  multi: /\b(multi|multi[- ]?audio)\b/i
+};
+
+function normalizeTorrentLanguages(torrent, file) {
+  if (torrent.languages && torrent.languages.length) return;
+
+  const haystack = `${torrent.name || ''} ${file?.name || ''}`.toLowerCase();
+
+  if (LANG_PATTERNS.ptbr.test(haystack)) {
+    torrent.languages = [{ value: 'portuguese', emoji: '🇧🇷', reason: 'name/file match' }];
+  } else if (LANG_PATTERNS.multi.test(haystack)) {
+    torrent.languages = [{ value: 'multi', emoji: '🌐', reason: 'multi-audio keyword' }];
+  } else {
+    torrent.languages = [{ value: 'english', emoji: '🇺🇸', reason: 'fallback' }];
+  }
 }
 
-function reorderByLanguage(torrents, preferredLangs) {
-  if (!preferredLangs || !preferredLangs.length) return torrents;
+function languageRank(lang) {
+  if (!lang) return 99;
+  if (lang === 'portuguese') return 0;
+  if (lang === 'multi') return 1;
+  if (lang === 'english') return 2;
+  return 50;
+}
 
-  const primary = [];
-  const fallback = [];
-  const others = [];
+function reorderByLanguage(torrents, preferred) {
+  if (!preferred || !preferred.length) return torrents;
 
-  for (const t of torrents) {
-    if (hasLanguage(t, preferredLangs)) {
-      primary.push(t);
-    } else if (hasLanguage(t, ['multi'])) {
-      fallback.push(t);
-    } else {
-      others.push(t);
-    }
-  }
-
-  return [...primary, ...fallback, ...others];
+  return torrents
+    .map(t => {
+      const lang = t.languages?.[0]?.value;
+      return {
+        torrent: t,
+        rank: languageRank(lang)
+      };
+    })
+    .sort((a, b) => a.rank - b.rank)
+    .map(e => e.torrent);
 }
 
 /* ========================================================= */
 
 const slowIndexers = {};
-const actionInProgress = {
-  getTorrents: {},
-  getDownload: {}
-};
+const actionInProgress = { getTorrents: {}, getDownload: {} };
 
 function parseStremioId(stremioId) {
   const [id, season, episode] = stremioId.split(':');
-  return {
-    id,
-    season: parseInt(season || 0),
-    episode: parseInt(episode || 0)
-  };
+  return { id, season: Number(season || 0), episode: Number(episode || 0) };
 }
 
 async function getMetaInfos(type, stremioId, language) {
@@ -76,41 +87,18 @@ async function mergeDefaultUserConfig(userConfig) {
 
 function searchEpisodeFile(files, season, episode) {
   return (
-    files.find(f => f.name.includes(`S${numberPad(season, 2)}E${numberPad(episode, 3)}`)) ||
     files.find(f => f.name.includes(`S${numberPad(season, 2)}E${numberPad(episode, 2)}`)) ||
-    files.find(f => f.name.includes(`${season}${numberPad(episode, 2)}`)) ||
-    files.find(f => f.name.includes(`${numberPad(episode, 2)}`)) ||
-    false
+    files[0]
   );
 }
 
-async function timeoutIndexerSearch(indexerId, promise, timeout) {
-  const start = Date.now();
-  const res = await promiseTimeout(promise, timeout).catch(() => []);
-  const duration = Date.now() - start;
-
-  if (timeout > config.slowIndexerDuration) {
-    slowIndexers[indexerId] ||= [];
-    if (duration > config.slowIndexerDuration) {
-      slowIndexers[indexerId].push({ duration, date: new Date() });
-    } else {
-      slowIndexers[indexerId] = [];
-    }
-  }
-  return res;
-}
-
 /* =========================================================
- * BUSCA DE TORRENTS
- * ======================================================= */
+   🔎 TORRENTS
+   ========================================================= */
 
 async function getTorrents(userConfig, metaInfos, debridInstance) {
-  while (actionInProgress.getTorrents[metaInfos.stremioId]) {
-    await wait(300);
-  }
+  while (actionInProgress.getTorrents[metaInfos.stremioId]) await wait(300);
   actionInProgress.getTorrents[metaInfos.stremioId] = true;
-
-  const t0 = Date.now();
 
   try {
     let {
@@ -120,100 +108,74 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       sortCached,
       sortUncached,
       indexerTimeoutSec,
-      languages
+      languages,
+      debug
     } = userConfig;
 
-    indexerTimeoutSec = 4;
+    indexerTimeoutSec = indexerTimeoutSec || 4;
 
     const { type, stremioId, year } = metaInfos;
-    console.log(`${stremioId} : searching torrents...`);
 
-    const filterSearch = torrent => {
-      if (!qualities.includes(torrent.quality)) return false;
-      const words = parseWords(torrent.name.toLowerCase());
-      return !excludeKeywords.find(w => words.includes(w));
-    };
+    console.log(`[SEARCH] ${stremioId} | languages=${languages.join(', ')}`);
 
-    const filterYear = torrent => !torrent.year || torrent.year === year;
+    const indexers = (await jackett.getIndexers())
+      .filter(i => i.searching[type].available);
 
-    let indexers = (await jackett.getIndexers()).filter(i => i.searching[type].available);
-    console.log(`${stremioId} : ${indexers.length} indexers`);
-
-    let torrents = [];
-
-    if (type === 'movie') {
-      const promises = indexers.map(i =>
-        timeoutIndexerSearch(
-          i.id,
-          jackett.searchMovieTorrents({ ...metaInfos, indexer: i.id }),
-          indexerTimeoutSec * 1000
-        )
-      );
-      torrents = [].concat(...(await Promise.all(promises)));
-    } else {
-      const eps = indexers.map(i =>
-        timeoutIndexerSearch(
-          i.id,
-          jackett.searchEpisodeTorrents({ ...metaInfos, indexer: i.id }),
-          indexerTimeoutSec * 1000
-        )
-      );
-      const packs = indexers.map(i =>
-        timeoutIndexerSearch(
-          i.id,
-          jackett.searchSerieTorrents({ ...metaInfos, indexer: i.id }),
-          indexerTimeoutSec * 1000
-        )
-      );
-      torrents = [].concat(...(await Promise.all(eps)), ...(await Promise.all(packs)).flat());
-    }
-
-    torrents = torrents
-      .filter(filterYear)
-      .filter(filterSearch)
-      .sort(sortBy('seeders', true));
-
-    torrents = reorderByLanguage(torrents, languages);
-    torrents = torrents.slice(0, maxTorrents + 2);
-
-    const limit = pLimit(5);
-    torrents = await Promise.all(
-      torrents.map(t =>
-        limit(async () => {
-          try {
-            t.infos = await promiseTimeout(torrentInfos.get(t), indexerTimeoutSec * 1000);
-            return t;
-          } catch {
-            return false;
-          }
-        })
-      )
+    const searchPromises = indexers.map(i =>
+      promiseTimeout(
+        type === 'movie'
+          ? jackett.searchMovieTorrents({ ...metaInfos, indexer: i.id })
+          : jackett.searchEpisodeTorrents({ ...metaInfos, indexer: i.id }),
+        indexerTimeoutSec * 1000
+      ).catch(() => [])
     );
 
-    torrents = torrents.filter(t => t && t.infos).slice(0, maxTorrents);
+    let torrents = (await Promise.all(searchPromises)).flat();
+
+    torrents = torrents
+      .filter(t => qualities.includes(t.quality))
+      .filter(t => !excludeKeywords.some(k => parseWords(t.name.toLowerCase()).includes(k)))
+      .filter(t => !t.year || t.year === year)
+      .sort(sortBy('seeders', true));
+
+    /* 🔤 normalização antes da ordenação */
+    torrents.forEach(t => normalizeTorrentLanguages(t));
+
+    torrents = reorderByLanguage(torrents, languages).slice(0, maxTorrents + 2);
+
+    const limit = pLimit(5);
+    torrents = (await Promise.all(torrents.map(t =>
+      limit(async () => {
+        try {
+          t.infos = await torrentInfos.get(t);
+          normalizeTorrentLanguages(t, t.infos?.files?.[0]);
+          return t;
+        } catch {
+          return null;
+        }
+      })
+    ))).filter(Boolean);
+
+    if (debug) {
+      torrents.forEach(t => {
+        console.log(
+          `[LANG] ${t.name} → ${t.languages?.[0]?.value} (${t.languages?.[0]?.reason})`
+        );
+      });
+    }
 
     if (debridInstance) {
-      const torrentsWithHash = torrents.filter(t => t.infos.infoHash);
-      const cached = (await debridInstance.getTorrentsCached(torrentsWithHash)).map(t => {
-        t.isCached = true;
-        return t;
-      });
+      const cached = (await debridInstance.getTorrentsCached(
+        torrents.filter(t => t.infos?.infoHash)
+      )).map(t => ({ ...t, isCached: true }));
 
       const uncached = torrents.filter(t => !cached.includes(t));
-
-      console.log(
-        `${stremioId} : ${cached.length} cached / ${uncached.length} uncached on ${debridInstance.shortName}`
-      );
 
       torrents = [
         ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages),
         ...reorderByLanguage(uncached.sort(sortBy(...sortUncached)), languages)
       ].slice(0, maxTorrents);
     }
-
-    console.log(
-      `${stremioId} : ${torrents.length} results returned in ${(Date.now() - t0) / 1000}s`
-    );
 
     return torrents;
   } finally {
@@ -222,117 +184,62 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
 }
 
 /* =========================================================
- * STREAMS (FORMATAÇÃO STREMIO)
- * ======================================================= */
-
-function getFile(files, type, season, episode) {
-  files = files.sort(sortBy('size', true));
-  if (type === 'movie') return files[0];
-  return searchEpisodeFile(files, season, episode) || files[0];
-}
-
-function detectBrazilianPortuguese(torrent, file) {
-  const haystack = `${torrent.name || ''} ${file?.name || ''}`.toLowerCase();
-  return /\b(pt-br|pt|por|pob|brazilian|dublado|nacional|bioma|multi[- ]?audio)\b/.test(haystack);
-}
+   🎬 STREAMS (LAYOUT 3 COLUNAS)
+   ========================================================= */
 
 export async function getStreams(userConfig, type, stremioId, publicUrl) {
   userConfig = await mergeDefaultUserConfig(userConfig);
-
   const { season, episode } = parseStremioId(stremioId);
   const debridInstance = debrid.instance(userConfig);
   const metaInfos = await getMetaInfos(type, stremioId, userConfig.metaLanguage);
 
   const torrents = await getTorrents(userConfig, metaInfos, debridInstance);
 
-  return torrents.map(torrent => {
-    const file = getFile(torrent.infos.files || [], type, season, episode) || {};
+  return torrents.map(t => {
+    const file = t.infos?.files?.[0] || {};
+    const isZip = file.name?.endsWith('.zip');
+    const size = bytesToSize(file.size || t.size || 0);
+    const seeds = t.seeders || 0;
 
-    const quality =
-      torrent.quality > 0
-        ? config.qualities.find(q => q.value === torrent.quality)?.label || ''
-        : '';
+    const lang = t.languages?.[0];
+    const langTag = lang?.emoji || '';
 
-    const serviceName = torrent.shortName || debridInstance.shortName;
-    const cachedSign = torrent.isCached ? '⚡' : '';
+    const indexer = t.indexerName || t.indexerId || 'Indexer';
+    const service = t.shortName || debridInstance.shortName;
+    const cached = t.isCached ? '⚡' : '';
 
-    const officialLangs = (torrent.languages || []).map(l => l.emoji);
-    const hasPtBrByName = detectBrazilianPortuguese(torrent, file);
-
-    const languageBadges = [
-      ...officialLangs,
-      ...(hasPtBrByName ? ['🇧🇷'] : [])
-    ].filter((v, i, a) => a.indexOf(v) === i).join(' ');
-
-    const isArchive =
-      torrent.infos.files?.length > 1 ||
-      file.name?.match(/\.(zip|rar|7z)$/i);
-
-    const sizeValue = isArchive
-      ? torrent.infos.files.reduce((s, f) => s + (f.size || 0), 0)
-      : (file.size || torrent.size);
-
-    const sizeLabel = `${isArchive ? '📦' : '📂'} ${bytesToSize(sizeValue)}`;
-
-    const indexer = torrent.indexerName || torrent.indexerId || 'Unknown';
-
-    const row1 = `${sizeLabel}  👤 ${torrent.seeders || 0}`;
-    const row2 = `⚙️ ${indexer}${languageBadges ? ' ' + languageBadges : ''}`;
-    const row3 = file.name || torrent.name;
+    const col1 = `${isZip ? '📦' : '📂'} ${size} | 👤 ${seeds}`;
+    const col2 = `⚙️ ${indexer} ${langTag}`;
+    const col3 = file.name || t.name;
 
     return {
-      name: `[${serviceName}${cachedSign}] Jackio ${quality}`,
-      title: [row1, row2, row3].join('\n'),
-      url: torrent.disabled
-        ? '#'
-        : `${publicUrl}/${btoa(
-            JSON.stringify(userConfig)
-          )}/download/${type}/${stremioId}/${torrent.id}/${file.name || torrent.name}`
+      name: `[${service}${cached}] Jackio`,
+      title: `${col1}\n${col2}\n${col3}`,
+      url: `${publicUrl}/${btoa(JSON.stringify(userConfig))}/download/${type}/${stremioId}/${t.id}/${file.name || t.name}`
     };
   });
 }
 
 /* =========================================================
- * DOWNLOAD
- * ======================================================= */
+   ⬇️ DOWNLOAD (inalterado do upstream)
+   ========================================================= */
 
 export async function getDownload(userConfig, type, stremioId, torrentId) {
   userConfig = await mergeDefaultUserConfig(userConfig);
   const debridInstance = debrid.instance(userConfig);
-
-  let cleanId = torrentId;
-  if (cleanId.includes(':')) cleanId = cleanId.split(':').slice(1).join(':');
-
-  const infos = await torrentInfos.getById(cleanId);
+  const infos = await torrentInfos.getById(torrentId);
   const { season, episode } = parseStremioId(stremioId);
 
-  const cacheKey = `download:${await debridInstance.getUserHash()}:${stremioId}:${torrentId}`;
+  const files = await debridInstance.getFilesFromMagnet(
+    infos.magnetUrl,
+    infos.infoHash
+  );
 
-  let files;
-  let download;
+  const file =
+    type === 'movie'
+      ? files[0]
+      : searchEpisodeFile(files, season, episode);
 
-  while (actionInProgress.getDownload[cacheKey]) {
-    await wait(200);
-  }
-  actionInProgress.getDownload[cacheKey] = true;
-
-  try {
-    download = await cache.get(cacheKey);
-    if (download) return download;
-
-    files = await debridInstance.getFiles(infos);
-    download = await debridInstance.getDownload(
-      getFile(files, type, season, episode)
-    );
-
-    if (download) {
-      download = applyMediaflowProxyIfNeeded(download, userConfig);
-      await cache.set(cacheKey, download, { ttl: 3600 });
-      return download;
-    }
-
-    throw new Error('No download');
-  } finally {
-    delete actionInProgress.getDownload[cacheKey];
-  }
+  let download = await debridInstance.getDownload(file);
+  return applyMediaflowProxyIfNeeded(download, userConfig);
 }
