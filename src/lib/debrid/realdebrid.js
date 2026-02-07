@@ -2,6 +2,7 @@ import {createHash} from 'crypto';
 import {ERROR} from './const.js';
 import {wait, isVideo} from '../util.js';
 import config from '../config.js';
+import pLimit from 'p-limit'; 
 
 export default class RealDebrid {
 
@@ -28,31 +29,62 @@ export default class RealDebrid {
     this.#ip = userConfig.ip || '';
   }
 
-  // --- CACHE CHECK NATIVO ---
   async getTorrentsCached(torrents){
     const items = torrents.map(t => {
         let hash = t.infos?.infoHash || t.infoHash;
-        let magnet = t.magneturl || t.infos?.magnetUrl || t.magnet;
-
-        if (!hash && magnet) {
-            const match = magnet.match(/xt=urn:btih:([a-zA-Z0-9]+)/);
-            if (match) hash = match[1];
+        if (!hash && (t.magneturl || t.infos?.magnetUrl)) {
+             const match = (t.magneturl || t.infos?.magnetUrl).match(/xt=urn:btih:([a-zA-Z0-9]+)/);
+             if(match) hash = match[1];
         }
-        if (hash && !magnet) magnet = `magnet:?xt=urn:btih:${hash}`;
-
-        return { hash, magnet, original: t };
-    }).filter(i => i.hash && i.magnet);
+        return { hash: hash?.toLowerCase(), magnet: t.magneturl || t.infos?.magnetUrl, original: t };
+    }).filter(i => i.hash);
 
     if (items.length === 0) return [];
 
-    const topItems = items.slice(0, 5); 
-    const cachedHashes = [];
+    try {
+        // Tenta método rápido
+        return await this.#checkInstantAvailability(items);
+    } catch (e) {
+        // Se falhar (Erro 37), usa fallback
+        if (e.message.includes('disabled_endpoint') || e.message.includes('error_code":37')) {
+            console.log("RD: Endpoint 'instantAvailability' desativado. Usando fallback lento.");
+            return await this.#checkByAddMagnet(items);
+        }
+        console.error(`RD Cache Check Error: ${e.message}`);
+        return [];
+    }
+  }
 
-    for (const item of topItems) {
+  async #checkInstantAvailability(items) {
+    const hashes = [...new Set(items.map(i => i.hash))]; 
+    const cachedHashes = new Set();
+    const chunkSize = 40; 
+
+    for(let i=0; i < hashes.length; i += chunkSize){
+        const chunk = hashes.slice(i, i+chunkSize);
+        const url = `/torrents/instantAvailability/${chunk.join('/')}`;
+        const res = await this.#request('GET', url);
+        for(const hash of chunk){
+            if(res[hash] && res[hash].rd && res[hash].rd.length > 0){
+                cachedHashes.add(hash);
+            }
+        }
+    }
+    return items.filter(item => cachedHashes.has(item.hash)).map(item => item.original);
+  }
+
+  // FALLBACK ROBUSTO
+  async #checkByAddMagnet(items) {
+    // Verifica Top 5 (mais prováveis) para não travar
+    const topItems = items.slice(0, 5); 
+    const cachedHashes = new Set();
+    const limit = pLimit(2); // Concorrência 2 (equilíbrio entre velocidade e segurança)
+
+    await Promise.all(topItems.map(item => limit(async () => {
+        if (!item.magnet) return;
         try {
             const body = new FormData();
             body.append('magnet', item.magnet);
-            
             const addRes = await this.#request('POST', `/torrents/addMagnet`, {body});
             
             if (addRes && addRes.id) {
@@ -63,20 +95,24 @@ export default class RealDebrid {
                     const selectBody = new FormData();
                     selectBody.append('files', 'all'); 
                     await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {body: selectBody});
+                    
+                    // IMPORTANTE: Aguarda 1s para o RD processar
+                    await wait(1000); 
+                    
                     infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
                 }
 
-                if (infoRes && infoRes.status === 'downloaded') {
-                    cachedHashes.push(item.hash);
+                if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
+                    cachedHashes.add(item.hash);
                 }
 
                 await this.#request('DELETE', `/torrents/delete/${torrentId}`);
             }
-        } catch (e) { }
-    }
+        } catch (e) {}
+    })));
 
     return items
-        .filter(item => cachedHashes.includes(item.hash))
+        .filter(item => cachedHashes.has(item.hash))
         .map(item => item.original);
   }
 
@@ -116,7 +152,6 @@ export default class RealDebrid {
     return this.#getFilesFromTorrent(res.id);
   }
 
-  // --- DOWNLOAD FIX (Proteção contra files vazio) ---
   async getDownload(file){
     let cleanId = file.id;
     if (cleanId.includes(':') && (cleanId.startsWith('rd:') || cleanId.startsWith('tb:'))) {
@@ -129,16 +164,12 @@ export default class RealDebrid {
     let torrent = await this.#request('GET', `/torrents/info/${torrentId}`);
     
     if(torrent.status == 'waiting_files_selection'){
-      // Tenta filtrar vídeos
-      const fileIds = torrent.files.filter(file => isVideo(file.path)).map(file => file.id);
-      
       const body = new FormData();
-      // CORREÇÃO: Se não achou videos (lista vazia), seleciona 'all' para evitar erro
-      if (fileIds.length > 0) {
-          body.append('files', fileIds.join(','));
+      if (fileId) {
+          body.append('files', fileId);
       } else {
-          console.log(`RD: Nenhum vídeo detectado automaticamente para ${torrentId}, selecionando 'all'`);
-          body.append('files', 'all');
+          const fileIds = torrent.files.filter(file => isVideo(file.path)).map(file => file.id);
+          body.append('files', fileIds.length > 0 ? fileIds.join(',') : 'all');
       }
 
       await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {body});
@@ -148,12 +179,6 @@ export default class RealDebrid {
     if(torrent.status == 'magnet_conversion') throw new Error(ERROR.NOT_READY);
 
     const linkIndex = torrent.files.filter(file => file.selected).findIndex(file => file.id == fileId);
-    // Se não achou pelo ID exato, tenta pegar o primeiro selecionado como fallback
-    if (linkIndex === -1) {
-         // console.warn('RD: File ID mismatch, tentando recuperar link...');
-    }
-    
-    // Tenta pegar o link pelo índice ou o primeiro disponível
     const link = torrent.links[linkIndex] || torrent.links[0] || false;
     
     if(!link) throw new Error(`LinkIndex or link not found`);
@@ -163,7 +188,6 @@ export default class RealDebrid {
     const res = await this.#request('POST', '/unrestrict/link', {body});
     return res.download;
   }
-  // ------------------------------------------------
 
   async getUserHash(){
     return createHash('md5').update(this.#apiKey).digest('hex');
@@ -215,6 +239,9 @@ export default class RealDebrid {
     try { data = await res.json(); }catch(err){ data = {}; }
 
     if(data.error_code){
+      // ERRO 37 Repassado
+      if (data.error_code === 37) throw new Error(`{"error":"disabled_endpoint","error_code":37}`);
+      
       switch(data.error_code){
         case 8: throw new Error(ERROR.EXPIRED_API_KEY);
         case 9: throw new Error(ERROR.ACCESS_DENIED);
