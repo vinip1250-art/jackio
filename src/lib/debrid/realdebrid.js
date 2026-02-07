@@ -30,50 +30,55 @@ export default class RealDebrid {
   }
 
   async getTorrentsCached(torrents){
-    const items = torrents.map(t => {
-        let hash = t.infos?.infoHash || t.infoHash;
-        if (!hash && (t.magneturl || t.infos?.magnetUrl)) {
-             const match = (t.magneturl || t.infos?.magnetUrl).match(/xt=urn:btih:([a-zA-Z0-9]+)/);
-             if(match) hash = match[1];
-        }
-        return { hash: hash?.toLowerCase(), magnet: t.magneturl || t.infos?.magnetUrl, original: t };
-    }).filter(i => i.hash);
+    try {
+        const items = torrents.map(t => {
+            let hash = t.infos?.infoHash || t.infoHash;
+            if (!hash && (t.magneturl || t.infos?.magnetUrl)) {
+                 const match = (t.magneturl || t.infos?.magnetUrl).match(/xt=urn:btih:([a-zA-Z0-9]+)/);
+                 if(match) hash = match[1];
+            }
+            return { hash: hash?.toLowerCase(), magnet: t.magneturl || t.infos?.magnetUrl, original: t };
+        }).filter(i => i.hash);
 
-    if (items.length === 0) return [];
+        if (items.length === 0) return [];
 
-    // OTIMIZAÇÃO: Pulamos StremThru (404) e InstantAvailability (Erro 37).
-    // Vamos direto para o método que funciona.
-    return await this.#checkByAddMagnet(items);
+        // Log para confirmar que a função iniciou
+        // console.log(`[RD] Iniciando verificação manual para ${items.length} itens...`);
+
+        // Vai direto para o método manual (AddMagnet) que funcionou nos logs anteriores
+        return await this.#checkByAddMagnet(items);
+
+    } catch (e) {
+        // SEGURANÇA MÁXIMA: Se der erro, loga e retorna vazio para não quebrar o addon
+        console.error(`[RD] ERRO CRÍTICO em getTorrentsCached: ${e.message}`);
+        return [];
+    }
   }
 
-  // --- MÉTODO BLINDADO (O que funcionou) ---
+  // --- MÉTODO MANUAL (O QUE FUNCIONOU) ---
   async #checkByAddMagnet(items) {
-    // Verifica apenas os Top 5 para manter agilidade
+    // Top 5 para agilidade
     const topItems = items.slice(0, 5); 
     const cachedHashes = new Set();
-    
-    // Aumentei a concorrência para 2 para ser um pouco mais rápido, 
-    // mas sem arriscar bloquear a conta.
     const limit = pLimit(2); 
 
     await Promise.all(topItems.map(item => limit(async () => {
-        let magnetLink = item.magnet;
-        // Reconstrói magnet robusto se necessário
-        if (!magnetLink || !magnetLink.includes('xt=urn:btih')) {
-             if(item.hash) {
-                 const trackers = [
-                    'udp://tracker.opentrackr.org:1337/announce',
-                    'udp://open.stealth.si:80/announce'
-                 ];
-                 magnetLink = `magnet:?xt=urn:btih:${item.hash}&dn=Package&tr=${trackers.join('&tr=')}`;
-             } else {
-                 return;
-             }
-        }
-
-        let torrentId = null;
         try {
-            // Usa URLSearchParams para evitar erro "magnet invalid"
+            let magnetLink = item.magnet;
+            // Reconstrói magnet se necessário
+            if (!magnetLink || !magnetLink.includes('xt=urn:btih')) {
+                 if(item.hash) {
+                     const trackers = [
+                        'udp://tracker.opentrackr.org:1337/announce',
+                        'udp://open.stealth.si:80/announce'
+                     ];
+                     magnetLink = `magnet:?xt=urn:btih:${item.hash}&dn=Package&tr=${trackers.join('&tr=')}`;
+                 } else {
+                     return;
+                 }
+            }
+
+            // Construção Manual do Body (String) para evitar erros de parser do RD
             const bodyStr = `magnet=${encodeURIComponent(magnetLink)}`;
             
             const addRes = await this.#request('POST', `/torrents/addMagnet`, {
@@ -82,38 +87,38 @@ export default class RealDebrid {
             });
             
             if (addRes && addRes.id) {
-                torrentId = addRes.id;
+                const torrentId = addRes.id;
                 
                 let infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
 
                 if (infoRes.status === 'waiting_files_selection') {
-                    const selectBody = 'files=all';
                     await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {
-                        body: selectBody,
+                        body: 'files=all',
                         headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
                     });
-                    
-                    // Espera mínima necessária
                     await wait(700); 
                     infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
                 }
 
-                // Polling rápido (2 tentativas)
-                for (let i = 1; i <= 2; i++) {
-                    if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
+                // Verifica cache
+                if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
+                    // console.log(`[RD] Cache OK: ${item.hash}`);
+                    cachedHashes.add(item.hash);
+                } else {
+                    // Polling extra rápido se não estiver pronto de imediato
+                     await wait(800);
+                     infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
+                     if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
                         cachedHashes.add(item.hash);
-                        break;
-                    }
-                    if(i < 2) { // Só espera se for tentar de novo
-                        await wait(800);
-                        infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
-                    }
+                     }
                 }
+
+                // Limpeza
+                await this.#request('DELETE', `/torrents/delete/${torrentId}`);
             }
         } catch (e) {
-             // Silencioso para performance
-        } finally {
-            if (torrentId) try { await this.#request('DELETE', `/torrents/delete/${torrentId}`); } catch(e){}
+             // Ignora erro individual
+             // console.error(`[RD] Erro item: ${e.message}`);
         }
     })));
 
@@ -143,6 +148,7 @@ export default class RealDebrid {
     const torrentId = await this.#searchTorrentIdByHash(infoHash);
     if(torrentId) return this.#getFilesFromTorrent(torrentId);
     
+    // Fallback manual para garantir sucesso na adição
     const bodyStr = `magnet=${encodeURIComponent(magnet)}`;
     const res = await this.#request('POST', `/torrents/addMagnet`, {
         body: bodyStr,
@@ -226,17 +232,20 @@ export default class RealDebrid {
 
   async #request(method, path, opts){
     opts = opts || {};
+    // Garante headers
     const headers = Object.assign({}, opts.headers || {}, {
         'accept': 'application/json',
         'authorization': `Bearer ${this.#apiKey}`
     });
 
+    // Injeção de IP segura
     if((method == 'POST' || method == 'PUT') && this.#ip){
         if(typeof opts.body === 'string' && !opts.body.includes('&ip=')){
              opts.body += `&ip=${this.#ip}`;
         } else if (opts.body instanceof URLSearchParams) {
              opts.body.append('ip', this.#ip);
         } else if (!opts.body) {
+             // Se body vazio, cria params
              opts.body = new URLSearchParams();
              opts.body.append('ip', this.#ip);
         }
@@ -255,7 +264,11 @@ export default class RealDebrid {
     try { data = await res.json(); }catch(err){ data = {}; }
 
     if(data.error_code){
-      // Erro 37 não precisa mais ser tratado aqui, pois não chamamos instantAvailability
+      // Ignora erro 37 aqui pois já tratamos desativando a chamada
+      if (data.error_code === 37) {
+          // Apenas lança erro simples para ser pego
+          throw new Error('RD Error 37');
+      }
       switch(data.error_code){
         case 8: throw new Error(ERROR.EXPIRED_API_KEY);
         case 9: throw new Error(ERROR.ACCESS_DENIED);
