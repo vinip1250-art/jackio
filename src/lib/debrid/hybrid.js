@@ -18,7 +18,6 @@ export default class Hybrid {
     this.tb = new Torbox({ ...userConfig, debridApiKey: userConfig.tbApiKey });
   }
 
-  // --- LÓGICA DE SEPARAÇÃO (SPLIT) ---
   async getTorrentsCached(torrents) {
     const rdCached = await this.rd.getTorrentsCached(torrents).catch(() => []);
     const tbCached = await this.tb.getTorrentsCached(torrents).catch(() => []);
@@ -28,61 +27,46 @@ export default class Hybrid {
 
     const finalResults = [];
 
-    // Itera sobre os torrents originais para manter a referência correta
     for (const torrent of torrents) {
         const hash = torrent.infos.infoHash;
         const inRd = rdHashes.has(hash);
         const inTb = tbHashes.has(hash);
-
-        // Salva o ID original antes de modificar (caso precise clonar)
         const originalId = torrent.id;
 
         if (inRd && inTb) {
-            // Cenário 1: Está nos dois. Criamos duas entradas separadas.
-            
-            // Entrada 1: RD (Usamos o objeto original para evitar duplicação em "uncached")
             torrent.shortName = 'RD';
-            torrent.id = `rd:${originalId}`; // Prefixo para o getDownload saber
+            torrent.id = `rd:${originalId}`;
             finalResults.push(torrent);
 
-            // Entrada 2: TB (Clone do objeto)
             const clone = Object.assign({}, torrent);
-            clone.infos = Object.assign({}, torrent.infos); // Clone superficial de infos
+            clone.infos = Object.assign({}, torrent.infos); 
             clone.shortName = 'TB';
             clone.id = `tb:${originalId}`;
             finalResults.push(clone);
 
         } else if (inRd) {
-            // Cenário 2: Só no RD
             torrent.shortName = 'RD';
             torrent.id = `rd:${originalId}`;
             finalResults.push(torrent);
 
         } else if (inTb) {
-            // Cenário 3: Só no Torbox
             torrent.shortName = 'TB';
             torrent.id = `tb:${originalId}`;
             finalResults.push(torrent);
         }
     }
-
     return finalResults;
   }
 
-  async getProgressTorrents(torrents) {
-    return {};
-  }
+  async getProgressTorrents(torrents) { return {}; }
 
-  // Fallback para resolver magnets soltos (não muito usado no fluxo principal agora)
   async resolve(magnet) {
-    try {
-      return await this.rd.resolve(magnet);
-    } catch (error) {
-      return await this.tb.resolve(magnet);
-    }
+    try { return await this.rd.resolve(magnet); } 
+    catch (error) { return await this.tb.resolve(magnet); }
   }
 
-  // Métodos auxiliares para suporte a indexadores privados
+  // Estes métodos de fallback usam RD primeiro (padrão antigo),
+  // mas o jackettio.js agora vai ignorar isso se tiver prefixo!
   async getFilesFromMagnet(magnet, infoHash) {
     try {
         const files = await this.rd.getFilesFromMagnet(magnet, infoHash);
@@ -113,7 +97,6 @@ export default class Hybrid {
      }
   }
   
-  // O "Roteador" de Downloads
   async getDownload(file) {
     const [servicePrefix, ...rest] = file.id.split(':');
     const originalFileId = rest.join(':');
@@ -124,7 +107,6 @@ export default class Hybrid {
     } else if (servicePrefix === 'tb') {
         return await this.tb.getDownload(fileForService);
     } else {
-        // Fallback legado
         return await this.rd.getDownload(file);
     }
   }
