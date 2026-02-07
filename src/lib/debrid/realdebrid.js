@@ -4,6 +4,8 @@ import {wait, isVideo} from '../util.js';
 import config from '../config.js';
 import pLimit from 'p-limit'; 
 
+const STREMTHRU_URL = 'https://stremthru.13377001.xyz';
+
 export default class RealDebrid {
 
   static id = 'realdebrid';
@@ -41,13 +43,18 @@ export default class RealDebrid {
 
     if (items.length === 0) return [];
 
-    // Tenta método oficial primeiro
+    // Tenta StremThru (Opcional, falha silenciosa se der 404)
+    try {
+        const stItems = await this.#checkStremThru(items);
+        if(stItems.length > 0) return stItems;
+    } catch(e) {}
+
+    // Tenta RD Oficial
     try {
         return await this.#checkInstantAvailability(items);
     } catch (e) {
-        // Se der Erro 37 (Endpoint Disabled), usa o Plano B
         if (e.message.includes('disabled_endpoint') || e.message.includes('error_code":37')) {
-            console.log("RD: Endpoint 'instantAvailability' desativado (Erro 37). Usando fallback 'addMagnet' via URLSearchParams.");
+            console.log("RD: Erro 37 (Instant Availability). Ativando fallback manual blindado...");
             return await this.#checkByAddMagnet(items);
         }
         console.error(`RD Cache Check Error: ${e.message}`);
@@ -55,98 +62,106 @@ export default class RealDebrid {
     }
   }
 
-  // MÉTODO 1: RÁPIDO (Instant Availability)
+  async #checkStremThru(items) {
+      const magnetList = items.map(i => i.magnet || `magnet:?xt=urn:btih:${i.hash}`);
+      if(magnetList.length === 0) return [];
+      const cachedHashes = new Set();
+      // Lote pequeno para não quebrar URL
+      const chunkSize = 5; 
+      for (let i = 0; i < magnetList.length; i += chunkSize) {
+          const chunk = magnetList.slice(i, i + chunkSize);
+          const params = new URLSearchParams();
+          params.append('magnets', chunk.join(','));
+          try {
+              const res = await fetch(`${STREMTHRU_URL}/v0/store?${params.toString()}`);
+              if (res.ok) {
+                  const data = await res.json();
+                  if (data.items) data.items.forEach(x => { if(x.hash) cachedHashes.add(x.hash.toLowerCase()); });
+              }
+          } catch(err) {}
+      }
+      return items.filter(item => cachedHashes.has(item.hash)).map(item => item.original);
+  }
+
   async #checkInstantAvailability(items) {
     const hashes = [...new Set(items.map(i => i.hash))]; 
     const cachedHashes = new Set();
     const chunkSize = 40; 
-
     for(let i=0; i < hashes.length; i += chunkSize){
         const chunk = hashes.slice(i, i+chunkSize);
         const url = `/torrents/instantAvailability/${chunk.join('/')}`;
-        
         const res = await this.#request('GET', url);
-        
         for(const hash of chunk){
-            if(res[hash] && res[hash].rd && res[hash].rd.length > 0){
-                cachedHashes.add(hash);
-            }
+            if(res[hash] && res[hash].rd && res[hash].rd.length > 0) cachedHashes.add(hash);
         }
     }
-
-    return items
-        .filter(item => cachedHashes.has(item.hash))
-        .map(item => item.original);
+    return items.filter(item => cachedHashes.has(item.hash)).map(item => item.original);
   }
 
-  // MÉTODO 2: LENTO MAS SEGURO (Fallback)
+  // --- FALLBACK BLINDADO ---
   async #checkByAddMagnet(items) {
     const topItems = items.slice(0, 5); 
     const cachedHashes = new Set();
     const limit = pLimit(1); 
 
-    console.log(`[RD-DEBUG] Iniciando verificação lenta de ${topItems.length} itens...`);
-
     await Promise.all(topItems.map(item => limit(async () => {
-        // Constrói magnet se necessário
         let magnetLink = item.magnet;
-        if (!magnetLink && item.hash) {
-            magnetLink = `magnet:?xt=urn:btih:${item.hash}`;
+        // Reconstrói magnet robusto se necessário
+        if (!magnetLink || !magnetLink.includes('xt=urn:btih')) {
+             if(item.hash) {
+                 const trackers = [
+                    'udp://tracker.opentrackr.org:1337/announce',
+                    'udp://open.stealth.si:80/announce'
+                 ];
+                 magnetLink = `magnet:?xt=urn:btih:${item.hash}&dn=Package&tr=${trackers.join('&tr=')}`;
+             } else {
+                 return;
+             }
         }
-        
-        if (!magnetLink) return;
 
         let torrentId = null;
-
         try {
-            // CORREÇÃO: Usar URLSearchParams em vez de FormData para strings simples
-            // Isso evita problemas de boundary/headers no Node.js
-            const body = new URLSearchParams();
-            body.append('magnet', magnetLink);
+            // CORREÇÃO: Envio manual de string com header explícito
+            // Isso evita erro "wrong_parameter" / "magnet is invalid"
+            const bodyStr = `magnet=${encodeURIComponent(magnetLink)}`;
             
-            const addRes = await this.#request('POST', `/torrents/addMagnet`, {body});
+            const addRes = await this.#request('POST', `/torrents/addMagnet`, {
+                body: bodyStr,
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+            });
             
             if (addRes && addRes.id) {
                 torrentId = addRes.id;
-                console.log(`[RD-DEBUG] Magnet Adicionado: ${torrentId}`);
+                console.log(`[RD-FALLBACK] Magnet OK: ${torrentId}`);
                 
                 let infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
 
                 if (infoRes.status === 'waiting_files_selection') {
-                    // Aqui mantemos FormData pois alguns endpoints do RD preferem, mas 'selectFiles' aceita ambos.
-                    // Vamos tentar URLSearchParams aqui também por consistência.
-                    const selectBody = new URLSearchParams();
-                    selectBody.append('files', 'all'); 
-                    await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {body: selectBody});
-                    
-                    await wait(1000); // Espera processar
+                    // Seleciona tudo
+                    const selectBody = 'files=all';
+                    await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {
+                        body: selectBody,
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                    });
+                    await wait(1000); 
                     infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
                 }
 
-                // Polling 3x
-                let isCached = false;
+                // Polling
                 for (let i = 1; i <= 3; i++) {
                     if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
-                        isCached = true;
+                        console.log(`[RD-FALLBACK] CACHE: ${item.hash}`);
+                        cachedHashes.add(item.hash);
                         break;
                     }
                     await wait(1000);
                     infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
                 }
-
-                if (isCached) {
-                    console.log(`[RD-DEBUG] CACHE ENCONTRADO: ${item.hash}`);
-                    cachedHashes.add(item.hash);
-                }
-
-                await this.#request('DELETE', `/torrents/delete/${torrentId}`);
             }
-        } catch (e) { 
-            console.error(`[RD-DEBUG] Erro item ${item.hash}: ${e.message}`);
+        } catch (e) {
+             console.error(`[RD-FALLBACK] Erro ${item.hash}: ${e.message}`);
         } finally {
-            if (torrentId) {
-                try { await this.#request('DELETE', `/torrents/delete/${torrentId}`); } catch(e){}
-            }
+            if (torrentId) try { await this.#request('DELETE', `/torrents/delete/${torrentId}`); } catch(e){}
         }
     })));
 
@@ -176,9 +191,12 @@ export default class RealDebrid {
     const torrentId = await this.#searchTorrentIdByHash(infoHash);
     if(torrentId) return this.#getFilesFromTorrent(torrentId);
     
-    const body = new URLSearchParams();
-    body.append('magnet', magnet);
-    const res = await this.#request('POST', `/torrents/addMagnet`, {body});
+    // Fallback manual para garantir
+    const bodyStr = `magnet=${encodeURIComponent(magnet)}`;
+    const res = await this.#request('POST', `/torrents/addMagnet`, {
+        body: bodyStr,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
     return this.#getFilesFromTorrent(res.id);
   }
 
@@ -186,7 +204,7 @@ export default class RealDebrid {
     const torrentId = await this.#searchTorrentIdByHash(infoHash);
     if(torrentId) return this.#getFilesFromTorrent(torrentId);
     
-    // Buffer precisa ser raw body ou FormData específico, RD suporta PUT com body raw para addTorrent
+    // PUT body raw
     const body = buffer;
     const res = await this.#request('PUT', `/torrents/addTorrent`, {body});
     return this.#getFilesFromTorrent(res.id);
@@ -198,21 +216,19 @@ export default class RealDebrid {
         const parts = cleanId.split(':');
         if(parts.length > 2) cleanId = parts.slice(1).join(':'); 
     }
-
     const [torrentId, fileId] = cleanId.split(':');
 
     let torrent = await this.#request('GET', `/torrents/info/${torrentId}`);
     
     if(torrent.status == 'waiting_files_selection'){
-      const body = new URLSearchParams();
-      if (fileId) {
-          body.append('files', fileId);
-      } else {
-          const fileIds = torrent.files.filter(file => isVideo(file.path)).map(file => file.id);
-          body.append('files', fileIds.length > 0 ? fileIds.join(',') : 'all');
-      }
-
-      await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {body});
+      // Correção também aqui
+      let bodyStr = 'files=all';
+      if(fileId) bodyStr = `files=${fileId}`;
+      
+      await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {
+          body: bodyStr,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      });
       torrent = await this.#request('GET', `/torrents/info/${torrentId}`);
     }
 
@@ -223,9 +239,11 @@ export default class RealDebrid {
     
     if(!link) throw new Error(`LinkIndex or link not found`);
 
-    const body = new URLSearchParams();
-    body.append('link', link);
-    const res = await this.#request('POST', '/unrestrict/link', {body});
+    const bodyStr = `link=${encodeURIComponent(link)}`;
+    const res = await this.#request('POST', '/unrestrict/link', {
+        body: bodyStr,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
     return res.download;
   }
 
@@ -259,37 +277,44 @@ export default class RealDebrid {
 
   async #request(method, path, opts){
     opts = opts || {};
-    opts = Object.assign(opts, {
-      method,
-      headers: Object.assign(opts.headers || {}, {
+    // Garante headers básicos
+    const headers = Object.assign({}, opts.headers || {}, {
         'accept': 'application/json',
         'authorization': `Bearer ${this.#apiKey}`
-      }),
-      query: opts.query || {}
     });
 
-    // Se for URLSearchParams, o fetch seta o content-type automaticamente para form-urlencoded
-    // Se for FormData, seta multipart/form-data
-    // Se for Buffer (PUT), não mexemos
+    // Se o corpo for string, o fetch não põe o content-type automático,
+    // então o chamador JÁ DEVE TER POSTO (como fizemos acima).
+    // Se não tiver body definido, iniciamos vazio.
     
-    if(method == 'POST' || method == 'PUT'){
-       if (!opts.body) {
-           opts.body = new URLSearchParams();
-       }
-       // Injeta IP se possível e se o body suportar append
-       if(this.#ip && opts.body.append) {
-           opts.body.append('ip', this.#ip);
-       }
+    // Tratamento IP
+    if((method == 'POST' || method == 'PUT') && this.#ip){
+        // Injeção de IP é complexa com string body, vamos simplificar:
+        // Se form-encoded string, concatenamos &ip=...
+        if(typeof opts.body === 'string' && !opts.body.includes('&ip=')){
+             opts.body += `&ip=${this.#ip}`;
+        } else if (opts.body instanceof URLSearchParams) {
+             opts.body.append('ip', this.#ip);
+        } else if (!opts.body) {
+             opts.body = new URLSearchParams();
+             opts.body.append('ip', this.#ip);
+        }
     }
 
-    const url = `https://api.real-debrid.com/rest/1.0${path}?${new URLSearchParams(opts.query).toString()}`;
-    const res = await fetch(url, opts);
+    const queryStr = new URLSearchParams(opts.query || {}).toString();
+    const url = `https://api.real-debrid.com/rest/1.0${path}?${queryStr}`;
+
+    const res = await fetch(url, {
+        method,
+        headers,
+        body: opts.body
+    });
+
     let data;
     try { data = await res.json(); }catch(err){ data = {}; }
 
     if(data.error_code){
       if (data.error_code === 37) throw new Error(`{"error":"disabled_endpoint","error_code":37}`);
-      
       switch(data.error_code){
         case 8: throw new Error(ERROR.EXPIRED_API_KEY);
         case 9: throw new Error(ERROR.ACCESS_DENIED);
