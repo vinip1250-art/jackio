@@ -4,8 +4,6 @@ import {wait, isVideo} from '../util.js';
 import config from '../config.js';
 import pLimit from 'p-limit'; 
 
-const STREMTHRU_URL = 'https://stremthru.13377001.xyz';
-
 export default class RealDebrid {
 
   static id = 'realdebrid';
@@ -43,66 +41,20 @@ export default class RealDebrid {
 
     if (items.length === 0) return [];
 
-    // Tenta StremThru (Opcional, falha silenciosa se der 404)
-    try {
-        const stItems = await this.#checkStremThru(items);
-        if(stItems.length > 0) return stItems;
-    } catch(e) {}
-
-    // Tenta RD Oficial
-    try {
-        return await this.#checkInstantAvailability(items);
-    } catch (e) {
-        if (e.message.includes('disabled_endpoint') || e.message.includes('error_code":37')) {
-            console.log("RD: Erro 37 (Instant Availability). Ativando fallback manual blindado...");
-            return await this.#checkByAddMagnet(items);
-        }
-        console.error(`RD Cache Check Error: ${e.message}`);
-        return [];
-    }
+    // OTIMIZAÇÃO: Pulamos StremThru (404) e InstantAvailability (Erro 37).
+    // Vamos direto para o método que funciona.
+    return await this.#checkByAddMagnet(items);
   }
 
-  async #checkStremThru(items) {
-      const magnetList = items.map(i => i.magnet || `magnet:?xt=urn:btih:${i.hash}`);
-      if(magnetList.length === 0) return [];
-      const cachedHashes = new Set();
-      // Lote pequeno para não quebrar URL
-      const chunkSize = 5; 
-      for (let i = 0; i < magnetList.length; i += chunkSize) {
-          const chunk = magnetList.slice(i, i + chunkSize);
-          const params = new URLSearchParams();
-          params.append('magnets', chunk.join(','));
-          try {
-              const res = await fetch(`${STREMTHRU_URL}/v0/store?${params.toString()}`);
-              if (res.ok) {
-                  const data = await res.json();
-                  if (data.items) data.items.forEach(x => { if(x.hash) cachedHashes.add(x.hash.toLowerCase()); });
-              }
-          } catch(err) {}
-      }
-      return items.filter(item => cachedHashes.has(item.hash)).map(item => item.original);
-  }
-
-  async #checkInstantAvailability(items) {
-    const hashes = [...new Set(items.map(i => i.hash))]; 
-    const cachedHashes = new Set();
-    const chunkSize = 40; 
-    for(let i=0; i < hashes.length; i += chunkSize){
-        const chunk = hashes.slice(i, i+chunkSize);
-        const url = `/torrents/instantAvailability/${chunk.join('/')}`;
-        const res = await this.#request('GET', url);
-        for(const hash of chunk){
-            if(res[hash] && res[hash].rd && res[hash].rd.length > 0) cachedHashes.add(hash);
-        }
-    }
-    return items.filter(item => cachedHashes.has(item.hash)).map(item => item.original);
-  }
-
-  // --- FALLBACK BLINDADO ---
+  // --- MÉTODO BLINDADO (O que funcionou) ---
   async #checkByAddMagnet(items) {
+    // Verifica apenas os Top 5 para manter agilidade
     const topItems = items.slice(0, 5); 
     const cachedHashes = new Set();
-    const limit = pLimit(1); 
+    
+    // Aumentei a concorrência para 2 para ser um pouco mais rápido, 
+    // mas sem arriscar bloquear a conta.
+    const limit = pLimit(2); 
 
     await Promise.all(topItems.map(item => limit(async () => {
         let magnetLink = item.magnet;
@@ -121,8 +73,7 @@ export default class RealDebrid {
 
         let torrentId = null;
         try {
-            // CORREÇÃO: Envio manual de string com header explícito
-            // Isso evita erro "wrong_parameter" / "magnet is invalid"
+            // Usa URLSearchParams para evitar erro "magnet invalid"
             const bodyStr = `magnet=${encodeURIComponent(magnetLink)}`;
             
             const addRes = await this.#request('POST', `/torrents/addMagnet`, {
@@ -132,34 +83,35 @@ export default class RealDebrid {
             
             if (addRes && addRes.id) {
                 torrentId = addRes.id;
-                console.log(`[RD-FALLBACK] Magnet OK: ${torrentId}`);
                 
                 let infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
 
                 if (infoRes.status === 'waiting_files_selection') {
-                    // Seleciona tudo
                     const selectBody = 'files=all';
                     await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {
                         body: selectBody,
                         headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
                     });
-                    await wait(1000); 
+                    
+                    // Espera mínima necessária
+                    await wait(700); 
                     infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
                 }
 
-                // Polling
-                for (let i = 1; i <= 3; i++) {
+                // Polling rápido (2 tentativas)
+                for (let i = 1; i <= 2; i++) {
                     if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
-                        console.log(`[RD-FALLBACK] CACHE: ${item.hash}`);
                         cachedHashes.add(item.hash);
                         break;
                     }
-                    await wait(1000);
-                    infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
+                    if(i < 2) { // Só espera se for tentar de novo
+                        await wait(800);
+                        infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
+                    }
                 }
             }
         } catch (e) {
-             console.error(`[RD-FALLBACK] Erro ${item.hash}: ${e.message}`);
+             // Silencioso para performance
         } finally {
             if (torrentId) try { await this.#request('DELETE', `/torrents/delete/${torrentId}`); } catch(e){}
         }
@@ -191,7 +143,6 @@ export default class RealDebrid {
     const torrentId = await this.#searchTorrentIdByHash(infoHash);
     if(torrentId) return this.#getFilesFromTorrent(torrentId);
     
-    // Fallback manual para garantir
     const bodyStr = `magnet=${encodeURIComponent(magnet)}`;
     const res = await this.#request('POST', `/torrents/addMagnet`, {
         body: bodyStr,
@@ -204,7 +155,6 @@ export default class RealDebrid {
     const torrentId = await this.#searchTorrentIdByHash(infoHash);
     if(torrentId) return this.#getFilesFromTorrent(torrentId);
     
-    // PUT body raw
     const body = buffer;
     const res = await this.#request('PUT', `/torrents/addTorrent`, {body});
     return this.#getFilesFromTorrent(res.id);
@@ -221,7 +171,6 @@ export default class RealDebrid {
     let torrent = await this.#request('GET', `/torrents/info/${torrentId}`);
     
     if(torrent.status == 'waiting_files_selection'){
-      // Correção também aqui
       let bodyStr = 'files=all';
       if(fileId) bodyStr = `files=${fileId}`;
       
@@ -277,20 +226,12 @@ export default class RealDebrid {
 
   async #request(method, path, opts){
     opts = opts || {};
-    // Garante headers básicos
     const headers = Object.assign({}, opts.headers || {}, {
         'accept': 'application/json',
         'authorization': `Bearer ${this.#apiKey}`
     });
 
-    // Se o corpo for string, o fetch não põe o content-type automático,
-    // então o chamador JÁ DEVE TER POSTO (como fizemos acima).
-    // Se não tiver body definido, iniciamos vazio.
-    
-    // Tratamento IP
     if((method == 'POST' || method == 'PUT') && this.#ip){
-        // Injeção de IP é complexa com string body, vamos simplificar:
-        // Se form-encoded string, concatenamos &ip=...
         if(typeof opts.body === 'string' && !opts.body.includes('&ip=')){
              opts.body += `&ip=${this.#ip}`;
         } else if (opts.body instanceof URLSearchParams) {
@@ -314,7 +255,7 @@ export default class RealDebrid {
     try { data = await res.json(); }catch(err){ data = {}; }
 
     if(data.error_code){
-      if (data.error_code === 37) throw new Error(`{"error":"disabled_endpoint","error_code":37}`);
+      // Erro 37 não precisa mais ser tratado aqui, pois não chamamos instantAvailability
       switch(data.error_code){
         case 8: throw new Error(ERROR.EXPIRED_API_KEY);
         case 9: throw new Error(ERROR.ACCESS_DENIED);
