@@ -8,9 +8,8 @@ import * as jackett from './jackett.js';
 import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
 
-/* =========================================================
- * IDIOMA – DETECÇÃO, PRIORIZAÇÃO E DEBUG
- * ======================================================= */
+// ... (códigos auxiliares de idioma e config sem alterações) ...
+// Copie o início do arquivo anterior até chegar em getTorrents
 
 const PTBR_KEYWORDS = [
   'pt-br', 'ptbr', 'portuguese', 'português',
@@ -56,10 +55,6 @@ function reorderByLanguage(torrents, preferredLangs, debug = false) {
     .sort((a, b) => b.score - a.score)
     .map(o => o.t);
 }
-
-/* =========================================================
- * TORRENTS
- * ======================================================= */
 
 const actionInProgress = {
   getTorrents: {},
@@ -117,45 +112,25 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       const words = parseWords(t.name.toLowerCase());
       if (excludeKeywords.find(w => words.includes(w))) return false;
       
-      // =========================================================
-      // NOVO FILTRO ESTRITO DE SÉRIES (CORREÇÃO APLICADA)
-      // =========================================================
       if (type === 'series') {
         const nameUpper = t.name.toUpperCase();
-        
-        // 1. Verifica Temporada (Se houver indicação Sxx, tem que bater)
         const sMatch = nameUpper.match(/S(\d{1,2})/);
         if (sMatch) {
             const fileSeason = parseInt(sMatch[1]);
             if (fileSeason !== season) return false;
         }
-
-        // 2. Verifica Episódio (Aceita E03, E03-04, etc. Rejeita E01 se pedimos E03)
-        // Regex captura: E<inicio> opcional(-E<fim>)
         const eMatch = nameUpper.match(/E(\d{1,4})(?:-?E?(\d{1,4}))?/);
         if (eMatch) {
             const fileEpStart = parseInt(eMatch[1]);
-            // Se for range (ex: E01-03), o fim é o grupo 2. Se não, é igual ao inicio.
             const fileEpEnd = eMatch[2] ? parseInt(eMatch[2]) : fileEpStart;
-            
-            // Se o episódio que queremos está fora desse range/numero, rejeita.
-            if (episode < fileEpStart || episode > fileEpEnd) {
-                return false;
-            }
+            if (episode < fileEpStart || episode > fileEpEnd) return false;
         }
-        // Nota: Se não tiver "E" no nome (ex: Season Pack "S01 Complete"), ele passa (correto).
       }
-      // =========================================================
-
       return !t.year || t.year === year;
     };
 
     let indexers = (await jackett.getIndexers())
       .filter(i => i.searching[type].available && (userIndexers.includes('all') || userIndexers.includes(i.id)));
-
-    if (debug) {
-      console.log(`[INDEXERS] ${indexers.map(i => i.title).join(', ')}`);
-    }
 
     let torrents = [];
 
@@ -201,7 +176,13 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         torrents.filter(t => t.infos?.infoHash)
       )).map(t => ({ ...t, isCached: true }));
 
-      let uncached = torrents.filter(t => !cached.find(c => c.id === t.id));
+      // CORREÇÃO CRÍTICA NA LÓGICA DE UNCACHED
+      let uncached = torrents.filter(t => {
+          // Verifica se este torrent (t) já está presente na lista 'cached'.
+          // No modo Hybrid, 'c.id' tem prefixo (ex: rd:123), mas 't.id' é puro (123).
+          // Temos que verificar se o ID original está contido.
+          return !cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
+      });
       
       if (debridInstance.constructor.id === 'hybrid') {
         const rdUncached = uncached.map(t => ({
