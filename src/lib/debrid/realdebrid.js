@@ -4,7 +4,6 @@ import {wait, isVideo} from '../util.js';
 import config from '../config.js';
 import pLimit from 'p-limit'; 
 
-// URL do StremThru (pode ser alterada se cair)
 const STREMTHRU_URL = 'https://stremthru.13377001.xyz';
 
 export default class RealDebrid {
@@ -32,7 +31,6 @@ export default class RealDebrid {
     this.#ip = userConfig.ip || '';
   }
 
-  // --- ESTRATÉGIA EM CAMADAS ---
   async getTorrentsCached(torrents){
     const items = torrents.map(t => {
         let hash = t.infos?.infoHash || t.infoHash;
@@ -45,28 +43,29 @@ export default class RealDebrid {
 
     if (items.length === 0) return [];
 
-    // --- CAMADA 1: STREMTHRU (Cache Distribuído) ---
-    // Verifica em um banco de dados externo para evitar Erro 37 no RD
+    // --- CAMADA 1: STREMTHRU ---
     try {
+        // Log para debug
+        console.log(`[RD] Checando StremThru para ${items.length} itens...`);
         const cachedByStremThru = await this.#checkStremThru(items);
+        
         if (cachedByStremThru.length > 0) {
-            // Se o StremThru retornou algo, já retornamos esses (confiança otimista)
-            // Opcional: Se quiser misturar resultados, remova o return e faça merge.
-            // Por performance, vamos retornar o que o StremThru achou.
+            console.log(`[RD] StremThru encontrou ${cachedByStremThru.length} itens! Retornando.`);
             return cachedByStremThru;
+        } else {
+            console.log(`[RD] StremThru não encontrou itens em cache.`);
         }
     } catch(e) {
-        console.warn(`[RD] StremThru check falhou, ignorando: ${e.message}`);
+        console.warn(`[RD] StremThru check falhou: ${e.message}`);
     }
 
-    // --- CAMADA 2: RD OFICIAL (Instant Availability) ---
+    // --- CAMADA 2: RD OFICIAL ---
     try {
         return await this.#checkInstantAvailability(items);
     } catch (e) {
-        // Se falhar com Erro 37, vai para a Camada 3
         if (e.message.includes('disabled_endpoint') || e.message.includes('error_code":37')) {
-            console.log("RD: Endpoint 'instantAvailability' desativado. Usando fallback lento.");
-            // --- CAMADA 3: FALLBACK LENTO (Corrigido) ---
+            console.log("RD: Endpoint 'instantAvailability' desativado (Erro 37). Iniciando fallback lento...");
+            // --- CAMADA 3: FALLBACK LENTO ---
             return await this.#checkByAddMagnet(items);
         }
         console.error(`RD Cache Check Error: ${e.message}`);
@@ -74,40 +73,35 @@ export default class RealDebrid {
     }
   }
 
-  // Função Auxiliar: StremThru Store
+  // --- STREMTHRU CHECK ---
   async #checkStremThru(items) {
+      // Garante que todos tenham magnet para consulta
       const magnetList = items.map(i => i.magnet || `magnet:?xt=urn:btih:${i.hash}`);
       if(magnetList.length === 0) return [];
 
-      // StremThru aceita múltiplos magnets na query string, mas cuidado com o tamanho da URL
-      // Vamos verificar em lotes pequenos
       const cachedHashes = new Set();
-      const chunkSize = 5; // Pequeno para não estourar URL
+      const chunkSize = 5; 
 
       for (let i = 0; i < magnetList.length; i += chunkSize) {
           const chunk = magnetList.slice(i, i + chunkSize);
           const params = new URLSearchParams();
-          // StremThru v0 store pattern
           params.append('magnets', chunk.join(','));
           
           try {
               const res = await fetch(`${STREMTHRU_URL}/v0/store?${params.toString()}`);
               if (res.ok) {
                   const data = await res.json();
-                  // A resposta costuma ser { items: [ { hash: '...', ... } ] }
                   if (data.items && Array.isArray(data.items)) {
                       data.items.forEach(item => {
                           if (item.hash) cachedHashes.add(item.hash.toLowerCase());
                       });
                   }
+              } else {
+                  console.log(`[STREMTHRU-DEBUG] Status ${res.status}: ${res.statusText}`);
               }
           } catch(err) {
-              // Falha silenciosa para não travar o fluxo
+              console.log(`[STREMTHRU-DEBUG] Erro de conexão: ${err.message}`);
           }
-      }
-
-      if (cachedHashes.size > 0) {
-          console.log(`[RD] StremThru encontrou ${cachedHashes.size} itens em cache.`);
       }
 
       return items
@@ -115,6 +109,7 @@ export default class RealDebrid {
         .map(item => item.original);
   }
 
+  // --- INSTANT AVAILABILITY ---
   async #checkInstantAvailability(items) {
     const hashes = [...new Set(items.map(i => i.hash))]; 
     const cachedHashes = new Set();
@@ -133,24 +128,22 @@ export default class RealDebrid {
     return items.filter(item => cachedHashes.has(item.hash)).map(item => item.original);
   }
 
-  // --- FALLBACK COM CORREÇÃO DE MAGNET ---
+  // --- FALLBACK LENTO (Corrigido) ---
   async #checkByAddMagnet(items) {
     const topItems = items.slice(0, 5); 
     const cachedHashes = new Set();
     const limit = pLimit(1); 
 
-    console.log(`[RD-DEBUG] Iniciando verificação lenta de ${topItems.length} itens...`);
-
     await Promise.all(topItems.map(item => limit(async () => {
-        // CORREÇÃO: Garante que o magnet existe. Se não, cria a partir do Hash.
+        // CORREÇÃO: Constrói magnet se faltar (Isso corrigirá o crash "magnet invalid")
         let magnetLink = item.magnet;
         if (!magnetLink && item.hash) {
             magnetLink = `magnet:?xt=urn:btih:${item.hash}`;
         }
-
+        
         if (!magnetLink) {
-            console.log(`[RD-DEBUG] Ignorando item sem hash/magnet.`);
-            return;
+             console.log(`[RD-DEBUG] Hash inválido/vazio, pulando.`);
+             return;
         }
 
         let torrentId = null;
@@ -162,6 +155,7 @@ export default class RealDebrid {
             
             if (addRes && addRes.id) {
                 torrentId = addRes.id;
+                console.log(`[RD-DEBUG] Verificando ID: ${torrentId}`);
                 
                 let infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
 
@@ -169,11 +163,11 @@ export default class RealDebrid {
                     const selectBody = new FormData();
                     selectBody.append('files', 'all'); 
                     await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {body: selectBody});
-                    await wait(1000); // Espera RD processar
+                    await wait(1000); 
                     infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
                 }
 
-                // Loop de verificação
+                // Polling 3x
                 let isCached = false;
                 for (let i = 1; i <= 3; i++) {
                     if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
@@ -185,14 +179,14 @@ export default class RealDebrid {
                 }
 
                 if (isCached) {
-                    console.log(`[RD-DEBUG] CACHE ENCONTRADO: ${item.hash}`);
+                    console.log(`[RD-DEBUG] Cache Confirmado: ${item.hash}`);
                     cachedHashes.add(item.hash);
                 }
 
                 await this.#request('DELETE', `/torrents/delete/${torrentId}`);
             }
         } catch (e) {
-            // console.error(`[RD-DEBUG] Erro item ${item.hash}: ${e.message}`);
+             console.error(`[RD-DEBUG] Erro item ${item.hash}: ${e.message}`);
         } finally {
             if (torrentId) {
                 try { await this.#request('DELETE', `/torrents/delete/${torrentId}`); } catch(e){}
