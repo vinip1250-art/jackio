@@ -29,6 +29,7 @@ export default class RealDebrid {
     this.#ip = userConfig.ip || '';
   }
 
+  // --- CACHE CHECK: MÉTODO ORIGINAL SUAVIZADO ---
   async getTorrentsCached(torrents){
     const items = torrents.map(t => {
         let hash = t.infos?.infoHash || t.infoHash;
@@ -37,79 +38,56 @@ export default class RealDebrid {
              if(match) hash = match[1];
         }
         return { hash: hash?.toLowerCase(), magnet: t.magneturl || t.infos?.magnetUrl, original: t };
-    }).filter(i => i.hash);
+    }).filter(i => i.hash && i.magnet);
 
     if (items.length === 0) return [];
 
-    try {
-        return await this.#checkInstantAvailability(items);
-    } catch (e) {
-        if (e.message.includes('disabled_endpoint') || e.message.includes('error_code":37')) {
-            console.log("RD: Endpoint 'instantAvailability' desativado (Erro 37). Usando fallback 'addMagnet'.");
-            return await this.#checkByAddMagnet(items);
-        }
-        console.error(`RD Cache Check Error: ${e.message}`);
-        return [];
-    }
-  }
-
-  // MÉTODO 1: RÁPIDO
-  async #checkInstantAvailability(items) {
-    const hashes = [...new Set(items.map(i => i.hash))]; 
+    // LIMITAÇÃO ESTRATÉGICA:
+    // Verifica apenas os TOP 5 para garantir velocidade e evitar bloqueios.
+    // Geralmente os filmes mais populares (com mais seeds) são os que estão no topo.
+    const itemsToCheck = items.slice(0, 10);
+    
     const cachedHashes = new Set();
-    const chunkSize = 40; 
+    
+    // Concorrência 1 = Um por um. 
+    // Garante estabilidade total, sacrificando um pouco de velocidade.
+    const limit = pLimit(1);
 
-    for(let i=0; i < hashes.length; i += chunkSize){
-        const chunk = hashes.slice(i, i+chunkSize);
-        const url = `/torrents/instantAvailability/${chunk.join('/')}`;
-        const res = await this.#request('GET', url);
-        for(const hash of chunk){
-            if(res[hash] && res[hash].rd && res[hash].rd.length > 0){
-                cachedHashes.add(hash);
-            }
-        }
-    }
-    return items.filter(item => cachedHashes.has(item.hash)).map(item => item.original);
-  }
-
-  // MÉTODO 2: FALLBACK (CORRIGIDO COM DELAY)
-  async #checkByAddMagnet(items) {
-    const topItems = items.slice(0, 15); 
-    const cachedHashes = new Set();
-    const limit = pLimit(3); 
-
-    await Promise.all(topItems.map(item => limit(async () => {
-        if (!item.magnet) return;
+    await Promise.all(itemsToCheck.map(item => limit(async () => {
         try {
+            // 1. Adiciona Magnet
             const body = new FormData();
             body.append('magnet', item.magnet);
             const addRes = await this.#request('POST', `/torrents/addMagnet`, {body});
             
             if (addRes && addRes.id) {
                 const torrentId = addRes.id;
+                
+                // 2. Verifica Status Inicial
                 let infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
 
+                // 3. Se precisar selecionar arquivos, seleciona TODOS para testar cache
                 if (infoRes.status === 'waiting_files_selection') {
                     const selectBody = new FormData();
                     selectBody.append('files', 'all'); 
                     await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {body: selectBody});
                     
-                    // CORREÇÃO: Aguarda RD processar a seleção (Delay Crucial)
-                    await wait(700); 
-                    
+                    // Pequeno delay para o RD processar a mudança de status
+                    await wait(500);
                     infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
                 }
 
-                // Verifica se está baixado OU com progresso 100%
-                if (infoRes && (infoRes.status === 'downloaded' || infoRes.progress === 100)) {
-                    // console.log(`RD Fallback: Cache encontrado para ${item.hash}`);
+                // 4. Se o status for 'downloaded', está em CACHE!
+                if (infoRes.status === 'downloaded') {
                     cachedHashes.add(item.hash);
                 }
 
+                // 5. Limpa o torrent da conta para não acumular lixo
                 await this.#request('DELETE', `/torrents/delete/${torrentId}`);
             }
-        } catch (e) { 
-             // console.error(`RD Fallback Error item: ${e.message}`);
+        } catch (e) {
+            // Silencia erros individuais para não parar a fila
+            // console.error(`Erro ao verificar cache item ${item.hash}: ${e.message}`);
         }
     })));
 
@@ -241,9 +219,7 @@ export default class RealDebrid {
     try { data = await res.json(); }catch(err){ data = {}; }
 
     if(data.error_code){
-      // ERRO 37 Repassado
-      if (data.error_code === 37) throw new Error(`{"error":"disabled_endpoint","error_code":37}`);
-      
+      // Tratamento genérico para erros
       switch(data.error_code){
         case 8: throw new Error(ERROR.EXPIRED_API_KEY);
         case 9: throw new Error(ERROR.ACCESS_DENIED);
