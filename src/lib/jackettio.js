@@ -8,6 +8,9 @@ import * as jackett from './jackett.js';
 import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
 
+// ... (código anterior de idiomas e torrents permanece igual, pulei para economizar espaço) ...
+// ... (Copie a parte de cima do arquivo anterior até chegar em getDownload) ...
+
 /* =========================================================
  * IDIOMA – DETECÇÃO, PRIORIZAÇÃO E DEBUG
  * ======================================================= */
@@ -201,10 +204,6 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
   }
 }
 
-/* =========================================================
- * STREAMS
- * ======================================================= */
-
 function getFile(files, type, season, episode) {
   files = files.sort(sortBy('size', true));
   return type === 'movie'
@@ -248,14 +247,13 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
 }
 
 /* =========================================================
- * DOWNLOAD
+ * DOWNLOAD (Correção Aplicada AQUI)
  * ======================================================= */
 
 export async function getDownload(userConfig, type, stremioId, torrentId) {
   userConfig = await mergeDefaultUserConfig(userConfig);
   const debridInstance = debrid.instance(userConfig);
 
-  // Remove prefixo para buscar metadados (torrentInfos), mas mantém a lógica de serviço
   let cleanId = torrentId.includes(':') && (torrentId.startsWith('rd:') || torrentId.startsWith('tb:'))
     ? torrentId.split(':').slice(1).join(':')
     : torrentId;
@@ -267,36 +265,48 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   let download = await cache.get(cacheKey);
   if (download) return download;
 
-  // === LÓGICA DE ROTEAMENTO HYBRID ===
+  // === LÓGICA DE ROTEAMENTO E UPLOAD DE .TORRENT ===
   let files;
   const isHybrid = debridInstance.constructor.id === 'hybrid';
   
+  // Função auxiliar para baixar buffer ou magnet
+  const getFilesForService = async (serviceInstance) => {
+    // 1. Tenta baixar o arquivo .torrent se existir link e não for magnet
+    if (infos.link && !infos.link.startsWith('magnet:')) {
+        try {
+            console.log(`Baixando .torrent de: ${infos.link}`);
+            const response = await fetch(infos.link);
+            if (response.ok) {
+                const buffer = await response.arrayBuffer();
+                // Passa o buffer para o debrid (Torbox agora suporta isso)
+                return await serviceInstance.getFilesFromBuffer(Buffer.from(buffer), infos.infoHash);
+            }
+        } catch(e) {
+            console.error('Falha ao baixar .torrent, fallback para magnet:', e.message);
+        }
+    }
+    
+    // 2. Fallback: Usa Magnet
+    if (infos.magnetUrl) {
+        return await serviceInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
+    } else {
+        return await serviceInstance.getFilesFromHash(infos.infoHash);
+    }
+  };
+
   if (isHybrid && torrentId.startsWith('tb:')) {
-      // 1. Se o ID pede Torbox, acessamos a instância .tb diretamente
-      if (infos.magnetUrl) {
-          files = await debridInstance.tb.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
-      } else {
-          files = await debridInstance.tb.getFilesFromHash(infos.infoHash);
-      }
-      // Recolocamos o prefixo tb: para que o Hybrid.getDownload saiba rotear depois
+      // Torbox via Hybrid
+      files = await getFilesForService(debridInstance.tb);
       files = files.map(f => ({...f, id: `tb:${f.id}`}));
   } 
   else if (isHybrid && torrentId.startsWith('rd:')) {
-      // 2. Se o ID pede RD, acessamos a instância .rd diretamente
-      if (infos.magnetUrl) {
-          files = await debridInstance.rd.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
-      } else {
-          files = await debridInstance.rd.getFilesFromHash(infos.infoHash);
-      }
+      // Real-Debrid via Hybrid
+      files = await getFilesForService(debridInstance.rd);
       files = files.map(f => ({...f, id: `rd:${f.id}`}));
   } 
   else {
-      // 3. Comportamento Padrão (Sem prefixo ou não-Hybrid)
-      if (infos.magnetUrl) {
-          files = await debridInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
-      } else {
-          files = await debridInstance.getFilesFromHash(infos.infoHash);
-      }
+      // Single Instance (Só Torbox ou Só RD)
+      files = await getFilesForService(debridInstance);
   }
 
   download = await debridInstance.getDownload(
