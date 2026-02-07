@@ -4,6 +4,9 @@ import {wait, isVideo} from '../util.js';
 import config from '../config.js';
 import pLimit from 'p-limit'; 
 
+// URL do StremThru (pode ser alterada se cair)
+const STREMTHRU_URL = 'https://stremthru.13377001.xyz';
+
 export default class RealDebrid {
 
   static id = 'realdebrid';
@@ -29,6 +32,7 @@ export default class RealDebrid {
     this.#ip = userConfig.ip || '';
   }
 
+  // --- ESTRATÉGIA EM CAMADAS ---
   async getTorrentsCached(torrents){
     const items = torrents.map(t => {
         let hash = t.infos?.infoHash || t.infoHash;
@@ -41,17 +45,74 @@ export default class RealDebrid {
 
     if (items.length === 0) return [];
 
+    // --- CAMADA 1: STREMTHRU (Cache Distribuído) ---
+    // Verifica em um banco de dados externo para evitar Erro 37 no RD
     try {
-        // Tenta método rápido
+        const cachedByStremThru = await this.#checkStremThru(items);
+        if (cachedByStremThru.length > 0) {
+            // Se o StremThru retornou algo, já retornamos esses (confiança otimista)
+            // Opcional: Se quiser misturar resultados, remova o return e faça merge.
+            // Por performance, vamos retornar o que o StremThru achou.
+            return cachedByStremThru;
+        }
+    } catch(e) {
+        console.warn(`[RD] StremThru check falhou, ignorando: ${e.message}`);
+    }
+
+    // --- CAMADA 2: RD OFICIAL (Instant Availability) ---
+    try {
         return await this.#checkInstantAvailability(items);
     } catch (e) {
+        // Se falhar com Erro 37, vai para a Camada 3
         if (e.message.includes('disabled_endpoint') || e.message.includes('error_code":37')) {
             console.log("RD: Endpoint 'instantAvailability' desativado. Usando fallback lento.");
+            // --- CAMADA 3: FALLBACK LENTO (Corrigido) ---
             return await this.#checkByAddMagnet(items);
         }
         console.error(`RD Cache Check Error: ${e.message}`);
         return [];
     }
+  }
+
+  // Função Auxiliar: StremThru Store
+  async #checkStremThru(items) {
+      const magnetList = items.map(i => i.magnet || `magnet:?xt=urn:btih:${i.hash}`);
+      if(magnetList.length === 0) return [];
+
+      // StremThru aceita múltiplos magnets na query string, mas cuidado com o tamanho da URL
+      // Vamos verificar em lotes pequenos
+      const cachedHashes = new Set();
+      const chunkSize = 5; // Pequeno para não estourar URL
+
+      for (let i = 0; i < magnetList.length; i += chunkSize) {
+          const chunk = magnetList.slice(i, i + chunkSize);
+          const params = new URLSearchParams();
+          // StremThru v0 store pattern
+          params.append('magnets', chunk.join(','));
+          
+          try {
+              const res = await fetch(`${STREMTHRU_URL}/v0/store?${params.toString()}`);
+              if (res.ok) {
+                  const data = await res.json();
+                  // A resposta costuma ser { items: [ { hash: '...', ... } ] }
+                  if (data.items && Array.isArray(data.items)) {
+                      data.items.forEach(item => {
+                          if (item.hash) cachedHashes.add(item.hash.toLowerCase());
+                      });
+                  }
+              }
+          } catch(err) {
+              // Falha silenciosa para não travar o fluxo
+          }
+      }
+
+      if (cachedHashes.size > 0) {
+          console.log(`[RD] StremThru encontrou ${cachedHashes.size} itens em cache.`);
+      }
+
+      return items
+        .filter(item => cachedHashes.has(item.hash))
+        .map(item => item.original);
   }
 
   async #checkInstantAvailability(items) {
@@ -72,65 +133,67 @@ export default class RealDebrid {
     return items.filter(item => cachedHashes.has(item.hash)).map(item => item.original);
   }
 
-  // --- FALLBACK COM DEBUG E POLLING ---
+  // --- FALLBACK COM CORREÇÃO DE MAGNET ---
   async #checkByAddMagnet(items) {
-    // Verifica apenas Top 5 para não bloquear
     const topItems = items.slice(0, 5); 
     const cachedHashes = new Set();
-    const limit = pLimit(1); // Um por um para garantir leitura dos logs
+    const limit = pLimit(1); 
 
     console.log(`[RD-DEBUG] Iniciando verificação lenta de ${topItems.length} itens...`);
 
     await Promise.all(topItems.map(item => limit(async () => {
-        if (!item.magnet) return;
+        // CORREÇÃO: Garante que o magnet existe. Se não, cria a partir do Hash.
+        let magnetLink = item.magnet;
+        if (!magnetLink && item.hash) {
+            magnetLink = `magnet:?xt=urn:btih:${item.hash}`;
+        }
+
+        if (!magnetLink) {
+            console.log(`[RD-DEBUG] Ignorando item sem hash/magnet.`);
+            return;
+        }
+
         let torrentId = null;
 
         try {
-            // 1. Adiciona Magnet
             const body = new FormData();
-            body.append('magnet', item.magnet);
+            body.append('magnet', magnetLink);
             const addRes = await this.#request('POST', `/torrents/addMagnet`, {body});
             
             if (addRes && addRes.id) {
                 torrentId = addRes.id;
-                console.log(`[RD-DEBUG] Magnet Adicionado: ${torrentId} (Hash: ${item.hash.substring(0,6)}...)`);
                 
-                // 2. Verifica Status Inicial
                 let infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
 
-                // 3. Seleciona arquivos se necessário
                 if (infoRes.status === 'waiting_files_selection') {
                     const selectBody = new FormData();
                     selectBody.append('files', 'all'); 
                     await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {body: selectBody});
+                    await wait(1000); // Espera RD processar
+                    infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
                 }
 
-                // 4. LOOP DE TENTATIVAS (POLLING)
-                // Tenta 3 vezes, esperando 1s entre elas
+                // Loop de verificação
                 let isCached = false;
                 for (let i = 1; i <= 3; i++) {
-                    await wait(1000); // Espera 1s
-                    infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
-                    
-                    console.log(`[RD-DEBUG] [${torrentId}] Tentativa ${i}: Status=${infoRes.status}, Progress=${infoRes.progress}%`);
-
                     if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
                         isCached = true;
-                        break; // Achou! Sai do loop
+                        break;
                     }
+                    await wait(1000);
+                    infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
                 }
 
                 if (isCached) {
-                    console.log(`[RD-DEBUG] [${torrentId}] CACHE ENCONTRADO!`);
+                    console.log(`[RD-DEBUG] CACHE ENCONTRADO: ${item.hash}`);
                     cachedHashes.add(item.hash);
-                } else {
-                    console.log(`[RD-DEBUG] [${torrentId}] Não está em cache após tentativas.`);
                 }
+
+                await this.#request('DELETE', `/torrents/delete/${torrentId}`);
             }
         } catch (e) {
-            console.error(`[RD-DEBUG] Erro item ${item.hash}: ${e.message}`);
+            // console.error(`[RD-DEBUG] Erro item ${item.hash}: ${e.message}`);
         } finally {
-            // Sempre deleta para limpar a conta
             if (torrentId) {
                 try { await this.#request('DELETE', `/torrents/delete/${torrentId}`); } catch(e){}
             }
