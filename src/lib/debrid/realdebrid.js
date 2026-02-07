@@ -28,54 +28,46 @@ export default class RealDebrid {
     this.#ip = userConfig.ip || '';
   }
 
+  // --- CACHE CHECK CORRIGIDO (instantAvailability) ---
   async getTorrentsCached(torrents){
     const items = torrents.map(t => {
         let hash = t.infos?.infoHash || t.infoHash;
-        let magnet = t.magneturl || t.infos?.magnetUrl || t.magnet;
-
-        if (!hash && magnet) {
-            const match = magnet.match(/xt=urn:btih:([a-zA-Z0-9]+)/);
-            if (match) hash = match[1];
+        // Fallback: tenta extrair hash do magnet se não vier explícito
+        if (!hash && (t.magneturl || t.infos?.magnetUrl)) {
+             const match = (t.magneturl || t.infos?.magnetUrl).match(/xt=urn:btih:([a-zA-Z0-9]+)/);
+             if(match) hash = match[1];
         }
-        if (hash && !magnet) magnet = `magnet:?xt=urn:btih:${hash}`;
-
-        return { hash, magnet, original: t };
-    }).filter(i => i.hash && i.magnet);
+        return { hash: hash?.toLowerCase(), original: t };
+    }).filter(i => i.hash);
 
     if (items.length === 0) return [];
 
-    const topItems = items.slice(0, 5); 
-    const cachedHashes = [];
+    // Remove duplicatas para economizar requisições
+    const hashes = [...new Set(items.map(i => i.hash))]; 
+    const cachedHashes = new Set();
+    const chunkSize = 40; // RD suporta URLs longas, 40 hashes é seguro
 
-    for (const item of topItems) {
+    for(let i=0; i < hashes.length; i += chunkSize){
+        const chunk = hashes.slice(i, i+chunkSize);
+        // Endpoint oficial para checagem em massa
+        const url = `/torrents/instantAvailability/${chunk.join('/')}`;
+        
         try {
-            const body = new FormData();
-            body.append('magnet', item.magnet);
-            
-            const addRes = await this.#request('POST', `/torrents/addMagnet`, {body});
-            
-            if (addRes && addRes.id) {
-                const torrentId = addRes.id;
-                let infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
-
-                if (infoRes.status === 'waiting_files_selection') {
-                    const selectBody = new FormData();
-                    selectBody.append('files', 'all'); 
-                    await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {body: selectBody});
-                    infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
+            const res = await this.#request('GET', url);
+            // Estrutura: { "hash": { "rd": [ {files...}, ... ] } }
+            for(const hash of chunk){
+                // Verifica se existe a chave 'rd' e se ela tem conteúdo (arquivos disponíveis)
+                if(res[hash] && res[hash].rd && res[hash].rd.length > 0){
+                    cachedHashes.add(hash);
                 }
-
-                if (infoRes && infoRes.status === 'downloaded') {
-                    cachedHashes.push(item.hash);
-                }
-
-                await this.#request('DELETE', `/torrents/delete/${torrentId}`);
             }
-        } catch (e) { }
+        } catch(e) {
+            console.error(`RD Cache check failed: ${e.message}`);
+        }
     }
 
     return items
-        .filter(item => cachedHashes.includes(item.hash))
+        .filter(item => cachedHashes.has(item.hash))
         .map(item => item.original);
   }
 
@@ -115,6 +107,7 @@ export default class RealDebrid {
     return this.#getFilesFromTorrent(res.id);
   }
 
+  // Mantendo a correção anterior do LinkIndex/File selection
   async getDownload(file){
     let cleanId = file.id;
     if (cleanId.includes(':') && (cleanId.startsWith('rd:') || cleanId.startsWith('tb:'))) {
@@ -128,11 +121,11 @@ export default class RealDebrid {
     
     if(torrent.status == 'waiting_files_selection'){
       const body = new FormData();
-      // CORREÇÃO 2: Selecionar APENAS o arquivo solicitado para evitar downloads duplicados
+      // SELEÇÃO PRECISA: Usa o fileId se disponível
       if (fileId) {
           body.append('files', fileId);
       } else {
-          // Fallback seguro caso algo dê errado
+          // Fallback: tenta detectar vídeos se não tiver ID específico
           const fileIds = torrent.files.filter(file => isVideo(file.path)).map(file => file.id);
           body.append('files', fileIds.length > 0 ? fileIds.join(',') : 'all');
       }
@@ -144,6 +137,7 @@ export default class RealDebrid {
     if(torrent.status == 'magnet_conversion') throw new Error(ERROR.NOT_READY);
 
     const linkIndex = torrent.files.filter(file => file.selected).findIndex(file => file.id == fileId);
+    // Tenta pegar o link correspondente ou o primeiro disponível como fallback
     const link = torrent.links[linkIndex] || torrent.links[0] || false;
     
     if(!link) throw new Error(`LinkIndex or link not found`);
