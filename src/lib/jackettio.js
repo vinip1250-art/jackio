@@ -106,7 +106,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       sortUncached,
       indexerTimeoutSec = 4,
       languages = [],
-      indexers: userIndexers, // Pega a config do usuário
+      indexers: userIndexers,
       debug
     } = userConfig;
 
@@ -119,7 +119,6 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       return !t.year || t.year === year;
     };
 
-    // CORREÇÃO 1: Filtrar indexadores baseado na config do usuário
     let indexers = (await jackett.getIndexers())
       .filter(i => i.searching[type].available && (userIndexers.includes('all') || userIndexers.includes(i.id)));
 
@@ -171,22 +170,20 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         torrents.filter(t => t.infos?.infoHash)
       )).map(t => ({ ...t, isCached: true }));
 
-      // CORREÇÃO 4: Lógica para Hybrid (RD + TB) em itens não cacheados
       let uncached = torrents.filter(t => !cached.find(c => c.id === t.id));
       
       if (debridInstance.constructor.id === 'hybrid') {
-        // Se for Hybrid, duplicamos a lista de uncached para oferecer as duas opções
         const rdUncached = uncached.map(t => ({
           ...t, 
           id: `rd:${t.id}`, 
           shortName: 'RD',
-          name: `[RD] ${t.name}` // Opcional: marca visualmente
+          name: `[RD] ${t.name}`
         }));
         const tbUncached = uncached.map(t => ({
           ...t, 
           id: `tb:${t.id}`, 
           shortName: 'TB',
-          name: `[TB] ${t.name}` // Opcional: marca visualmente
+          name: `[TB] ${t.name}`
         }));
         uncached = [...rdUncached, ...tbUncached];
       }
@@ -258,6 +255,7 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   userConfig = await mergeDefaultUserConfig(userConfig);
   const debridInstance = debrid.instance(userConfig);
 
+  // Remove prefixo para buscar metadados (torrentInfos), mas mantém a lógica de serviço
   let cleanId = torrentId.includes(':') && (torrentId.startsWith('rd:') || torrentId.startsWith('tb:'))
     ? torrentId.split(':').slice(1).join(':')
     : torrentId;
@@ -269,12 +267,36 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   let download = await cache.get(cacheKey);
   if (download) return download;
 
-  // CORREÇÃO 3: Usar getFilesFromMagnet se disponível para preservar trackers (Torbox)
+  // === LÓGICA DE ROTEAMENTO HYBRID ===
   let files;
-  if (infos.magnetUrl) {
-    files = await debridInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
-  } else {
-    files = await debridInstance.getFilesFromHash(infos.infoHash);
+  const isHybrid = debridInstance.constructor.id === 'hybrid';
+  
+  if (isHybrid && torrentId.startsWith('tb:')) {
+      // 1. Se o ID pede Torbox, acessamos a instância .tb diretamente
+      if (infos.magnetUrl) {
+          files = await debridInstance.tb.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
+      } else {
+          files = await debridInstance.tb.getFilesFromHash(infos.infoHash);
+      }
+      // Recolocamos o prefixo tb: para que o Hybrid.getDownload saiba rotear depois
+      files = files.map(f => ({...f, id: `tb:${f.id}`}));
+  } 
+  else if (isHybrid && torrentId.startsWith('rd:')) {
+      // 2. Se o ID pede RD, acessamos a instância .rd diretamente
+      if (infos.magnetUrl) {
+          files = await debridInstance.rd.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
+      } else {
+          files = await debridInstance.rd.getFilesFromHash(infos.infoHash);
+      }
+      files = files.map(f => ({...f, id: `rd:${f.id}`}));
+  } 
+  else {
+      // 3. Comportamento Padrão (Sem prefixo ou não-Hybrid)
+      if (infos.magnetUrl) {
+          files = await debridInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
+      } else {
+          files = await debridInstance.getFilesFromHash(infos.infoHash);
+      }
   }
 
   download = await debridInstance.getDownload(
