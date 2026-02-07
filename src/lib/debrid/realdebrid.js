@@ -2,7 +2,7 @@ import {createHash} from 'crypto';
 import {ERROR} from './const.js';
 import {wait, isVideo} from '../util.js';
 import config from '../config.js';
-import pLimit from 'p-limit'; // Importação necessária para o paralelismo
+import pLimit from 'p-limit'; 
 
 export default class RealDebrid {
 
@@ -29,9 +29,7 @@ export default class RealDebrid {
     this.#ip = userConfig.ip || '';
   }
 
-  // --- FUNÇÃO PRINCIPAL DE CACHE ---
   async getTorrentsCached(torrents){
-    // Prepara a lista normalizada
     const items = torrents.map(t => {
         let hash = t.infos?.infoHash || t.infoHash;
         if (!hash && (t.magneturl || t.infos?.magnetUrl)) {
@@ -44,10 +42,8 @@ export default class RealDebrid {
     if (items.length === 0) return [];
 
     try {
-        // Tenta o método rápido primeiro
         return await this.#checkInstantAvailability(items);
     } catch (e) {
-        // Se der Erro 37 (Endpoint Disabled), usa o Plano B
         if (e.message.includes('disabled_endpoint') || e.message.includes('error_code":37')) {
             console.log("RD: Endpoint 'instantAvailability' desativado (Erro 37). Usando fallback 'addMagnet'.");
             return await this.#checkByAddMagnet(items);
@@ -57,7 +53,7 @@ export default class RealDebrid {
     }
   }
 
-  // MÉTODO 1: RÁPIDO (Instant Availability)
+  // MÉTODO 1: RÁPIDO
   async #checkInstantAvailability(items) {
     const hashes = [...new Set(items.map(i => i.hash))]; 
     const cachedHashes = new Set();
@@ -66,57 +62,54 @@ export default class RealDebrid {
     for(let i=0; i < hashes.length; i += chunkSize){
         const chunk = hashes.slice(i, i+chunkSize);
         const url = `/torrents/instantAvailability/${chunk.join('/')}`;
-        
         const res = await this.#request('GET', url);
-        
         for(const hash of chunk){
             if(res[hash] && res[hash].rd && res[hash].rd.length > 0){
                 cachedHashes.add(hash);
             }
         }
     }
-
-    return items
-        .filter(item => cachedHashes.has(item.hash))
-        .map(item => item.original);
+    return items.filter(item => cachedHashes.has(item.hash)).map(item => item.original);
   }
 
-  // MÉTODO 2: LENTO MAS SEGURO (Add Magnet Fallback)
+  // MÉTODO 2: FALLBACK (CORRIGIDO COM DELAY)
   async #checkByAddMagnet(items) {
-    // Verifica os Top 15 para não sobrecarregar, mas encontrar resultados
     const topItems = items.slice(0, 15); 
     const cachedHashes = new Set();
-    const limit = pLimit(3); // Verifica 3 simultaneamente para ser mais rápido
+    const limit = pLimit(3); 
 
     await Promise.all(topItems.map(item => limit(async () => {
         if (!item.magnet) return;
         try {
             const body = new FormData();
             body.append('magnet', item.magnet);
-            
             const addRes = await this.#request('POST', `/torrents/addMagnet`, {body});
             
             if (addRes && addRes.id) {
                 const torrentId = addRes.id;
                 let infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
 
-                // Se precisar selecionar arquivos
                 if (infoRes.status === 'waiting_files_selection') {
                     const selectBody = new FormData();
                     selectBody.append('files', 'all'); 
                     await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {body: selectBody});
+                    
+                    // CORREÇÃO: Aguarda RD processar a seleção (Delay Crucial)
+                    await wait(700); 
+                    
                     infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
                 }
 
-                if (infoRes && infoRes.status === 'downloaded') {
+                // Verifica se está baixado OU com progresso 100%
+                if (infoRes && (infoRes.status === 'downloaded' || infoRes.progress === 100)) {
+                    // console.log(`RD Fallback: Cache encontrado para ${item.hash}`);
                     cachedHashes.add(item.hash);
                 }
 
-                // Limpa o torrent da conta
                 await this.#request('DELETE', `/torrents/delete/${torrentId}`);
             }
         } catch (e) { 
-            // Ignora erro individual para não parar o loop
+             // console.error(`RD Fallback Error item: ${e.message}`);
         }
     })));
 
@@ -247,8 +240,8 @@ export default class RealDebrid {
     let data;
     try { data = await res.json(); }catch(err){ data = {}; }
 
-    // Tratamento de erro 37 repassado para o Try/Catch superior
     if(data.error_code){
+      // ERRO 37 Repassado
       if (data.error_code === 37) throw new Error(`{"error":"disabled_endpoint","error_code":37}`);
       
       switch(data.error_code){
