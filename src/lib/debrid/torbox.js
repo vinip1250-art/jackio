@@ -25,7 +25,6 @@ export default class Torbox {
     this.#apiKey = userConfig.debridApiKey;
   }
 
-  // --- 1. CACHE CHECK (Adaptado do Sootio) ---
   async getTorrentsCached(torrents){
     const items = torrents.map(t => {
         let hash = t.infos?.infoHash || t.infoHash;
@@ -42,14 +41,13 @@ export default class Torbox {
 
     const hashes = items.map(i => i.hash);
     const cachedHashes = new Set();
-    const chunkSize = 50; // Sootio faz em lotes, boa prática manter
+    const chunkSize = 50; 
     
     for (let i = 0; i < hashes.length; i += chunkSize) {
       const chunk = hashes.slice(i, i + chunkSize);
       const hashString = chunk.join(',');
       
       try {
-        // Sootio usa GET com query string para checkcached
         const data = await this.#request('GET', '/torrents/checkcached', {
           query: { hash: hashString, format: 'list' }
         });
@@ -80,8 +78,6 @@ export default class Torbox {
     return {};
   }
 
-  // --- 2. ADIÇÃO E MONITORAMENTO (Lógica Sootio) ---
-
   async resolve(magnet){
     try {
         const files = await this.getFilesFromMagnet(magnet, '');
@@ -91,49 +87,44 @@ export default class Torbox {
   }
 
   async getFilesFromHash(infoHash){
+    // Se chegou aqui só com hash, tentamos construir um magnet robusto
     const magnet = this.#buildMagnet(infoHash);
     return this.getFilesFromMagnet(magnet, infoHash);
   }
 
   async getFilesFromBuffer(buffer, infoHash){
-    // Torbox API v1 prefere magnet, mas se tivermos que enviar arquivo, usamos FormData
-    // Porém, no fluxo do Sootio, ele foca em magnet. Vamos manter magnet como prioridade.
     const magnet = this.#buildMagnet(infoHash);
     return this.getFilesFromMagnet(magnet, infoHash);
   }
 
   async getFilesFromMagnet(magnet, infoHash){
-    // 1. Tenta adicionar usando a lógica do Sootio (URLSearchParams)
+    // Tenta adicionar
     const torrentId = await this.#addToTorbox(magnet);
     
     if (!torrentId) {
-        // Se falhar o ID, tenta recuperar buscando o hash na lista (fallback)
-        console.log(`[Torbox] Tentando recuperar ID para hash ${infoHash}...`);
+        // Fallback: busca pelo hash se já existe
+        console.log(`[Torbox] ID não retornado ou duplicado. Buscando hash ${infoHash}...`);
         const foundId = await this.#searchTorrentIdByHash(infoHash, true);
         if(foundId) return this.#waitForTorrentReady(foundId);
         
         throw new Error('Falha ao adicionar torrent ao Torbox.');
     }
 
-    // 2. Aguarda ficar pronto (download_present: true)
+    // Aguarda processamento
     return this.#waitForTorrentReady(torrentId);
   }
 
-  // Lógica de Create do Sootio: POST /createtorrent com URLSearchParams
   async #addToTorbox(magnetLink) {
     const body = new URLSearchParams();
     body.append('magnet', magnetLink);
     body.append('allow_zip', 'false');
 
     try {
-        // headers vazios aqui pois URLSearchParams define content-type automaticamente no fetch
         const res = await this.#request('POST', '/torrents/createtorrent', { body });
         
         if (res?.success) {
             return res.data?.torrent_id || res.data?.id;
         } else if (res?.detail && (res.detail.includes('exists') || res.detail.includes('duplicate'))) {
-            // Se já existe, não retorna ID no create, retornamos null para o chamador buscar na lista
-            console.log(`[Torbox] Torrent já existe.`);
             return null;
         }
         console.error(`[Torbox] Erro no create: ${JSON.stringify(res)}`);
@@ -158,9 +149,8 @@ export default class Torbox {
     return null;
   }
 
-  // Lógica de Polling do Sootio: espera 'download_present'
   async #waitForTorrentReady(id){
-    let retries = 30; // 30 tentativas (aprox 30-40s)
+    let retries = 30; 
     let torrentInfo = null;
 
     while(retries > 0) {
@@ -170,13 +160,10 @@ export default class Torbox {
             const found = res.data.find(t => t.id === id);
             
             if (found) {
-                // A chave do sucesso no Sootio: download_present === true
                 if (found.download_present === true && found.files && found.files.length > 0) {
                     torrentInfo = found;
                     break;
                 }
-                
-                if (retries % 5 === 0) console.log(`[Torbox] Aguardando 'download_present'... ID: ${id} State: ${found.download_state}`);
             }
         }
         await wait(1500);
@@ -194,7 +181,6 @@ export default class Torbox {
     }));
   }
 
-  // --- 3. DOWNLOAD (Lógica Sootio: requestdl) ---
   async getDownload(file){
     let cleanId = file.id;
     if (cleanId.includes(':') && (cleanId.startsWith('tb:') || cleanId.startsWith('rd:'))) {
@@ -204,8 +190,6 @@ export default class Torbox {
     
     const [torrentId, fileId] = cleanId.split(':');
     
-    // Sootio envia user_ip também, vamos adicionar se possível (mas 'clientIp' geralmente vem de fora)
-    // Aqui usamos o padrão da classe
     const query = { 
         token: this.#apiKey, 
         torrent_id: torrentId, 
@@ -215,9 +199,7 @@ export default class Torbox {
 
     try {
         const res = await this.#request('GET', '/torrents/requestdl', { query });
-        
         if (res.success && res.data) return res.data;
-        
         throw new Error(res.detail || 'Falha ao obter link Torbox');
     } catch (err) { throw err; }
   }
@@ -227,11 +209,15 @@ export default class Torbox {
   }
 
   #buildMagnet(hash) {
+      // CORREÇÃO 3: Lista de trackers expandida para ajudar em torrents apenas-hash
       const trackers = [
           'udp://tracker.opentrackr.org:1337/announce',
           'udp://open.stealth.si:80/announce',
           'udp://tracker.coppersurfer.tk:6969/announce',
-          'udp://tracker.leechers-paradise.org:6969/announce'
+          'udp://tracker.leechers-paradise.org:6969/announce',
+          'udp://9.rarbg.to:2710/announce',
+          'udp://tracker.cyberia.is:6969/announce',
+          'udp://tracker.internetwarriors.net:1337/announce'
       ];
       return `magnet:?xt=urn:btih:${hash}&tr=${trackers.join('&tr=')}`;
   }
@@ -250,7 +236,6 @@ export default class Torbox {
     let data;
     try { data = await res.json(); } catch(err){ data = {}; }
 
-    // Ignora erros no create para tratar manualmente (duplicatas)
     if (path.includes('create') && res.status >= 400) return data;
 
     if (res.status >= 400) {
