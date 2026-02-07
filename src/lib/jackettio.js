@@ -8,9 +8,6 @@ import * as jackett from './jackett.js';
 import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
 
-// ... (código anterior de idiomas e torrents permanece igual, pulei para economizar espaço) ...
-// ... (Copie a parte de cima do arquivo anterior até chegar em getDownload) ...
-
 /* =========================================================
  * IDIOMA – DETECÇÃO, PRIORIZAÇÃO E DEBUG
  * ======================================================= */
@@ -119,6 +116,37 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       if (!qualities.includes(t.quality)) return false;
       const words = parseWords(t.name.toLowerCase());
       if (excludeKeywords.find(w => words.includes(w))) return false;
+      
+      // =========================================================
+      // NOVO FILTRO ESTRITO DE SÉRIES (CORREÇÃO APLICADA)
+      // =========================================================
+      if (type === 'series') {
+        const nameUpper = t.name.toUpperCase();
+        
+        // 1. Verifica Temporada (Se houver indicação Sxx, tem que bater)
+        const sMatch = nameUpper.match(/S(\d{1,2})/);
+        if (sMatch) {
+            const fileSeason = parseInt(sMatch[1]);
+            if (fileSeason !== season) return false;
+        }
+
+        // 2. Verifica Episódio (Aceita E03, E03-04, etc. Rejeita E01 se pedimos E03)
+        // Regex captura: E<inicio> opcional(-E<fim>)
+        const eMatch = nameUpper.match(/E(\d{1,4})(?:-?E?(\d{1,4}))?/);
+        if (eMatch) {
+            const fileEpStart = parseInt(eMatch[1]);
+            // Se for range (ex: E01-03), o fim é o grupo 2. Se não, é igual ao inicio.
+            const fileEpEnd = eMatch[2] ? parseInt(eMatch[2]) : fileEpStart;
+            
+            // Se o episódio que queremos está fora desse range/numero, rejeita.
+            if (episode < fileEpStart || episode > fileEpEnd) {
+                return false;
+            }
+        }
+        // Nota: Se não tiver "E" no nome (ex: Season Pack "S01 Complete"), ele passa (correto).
+      }
+      // =========================================================
+
       return !t.year || t.year === year;
     };
 
@@ -246,10 +274,6 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
   });
 }
 
-/* =========================================================
- * DOWNLOAD (Correção Aplicada AQUI)
- * ======================================================= */
-
 export async function getDownload(userConfig, type, stremioId, torrentId) {
   userConfig = await mergeDefaultUserConfig(userConfig);
   const debridInstance = debrid.instance(userConfig);
@@ -269,16 +293,13 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   let files;
   const isHybrid = debridInstance.constructor.id === 'hybrid';
   
-  // Função auxiliar para baixar buffer ou magnet
   const getFilesForService = async (serviceInstance) => {
-    // 1. Tenta baixar o arquivo .torrent se existir link e não for magnet
     if (infos.link && !infos.link.startsWith('magnet:')) {
         try {
             console.log(`Baixando .torrent de: ${infos.link}`);
             const response = await fetch(infos.link);
             if (response.ok) {
                 const buffer = await response.arrayBuffer();
-                // Passa o buffer para o debrid (Torbox agora suporta isso)
                 return await serviceInstance.getFilesFromBuffer(Buffer.from(buffer), infos.infoHash);
             }
         } catch(e) {
@@ -286,7 +307,6 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
         }
     }
     
-    // 2. Fallback: Usa Magnet
     if (infos.magnetUrl) {
         return await serviceInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
     } else {
@@ -295,17 +315,14 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   };
 
   if (isHybrid && torrentId.startsWith('tb:')) {
-      // Torbox via Hybrid
       files = await getFilesForService(debridInstance.tb);
       files = files.map(f => ({...f, id: `tb:${f.id}`}));
   } 
   else if (isHybrid && torrentId.startsWith('rd:')) {
-      // Real-Debrid via Hybrid
       files = await getFilesForService(debridInstance.rd);
       files = files.map(f => ({...f, id: `rd:${f.id}`}));
   } 
   else {
-      // Single Instance (Só Torbox ou Só RD)
       files = await getFilesForService(debridInstance);
   }
 
