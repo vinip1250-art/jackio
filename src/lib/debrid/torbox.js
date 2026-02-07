@@ -87,47 +87,57 @@ export default class Torbox {
   }
 
   async getFilesFromHash(infoHash){
-    // Se chegou aqui só com hash, tentamos construir um magnet robusto
     const magnet = this.#buildMagnet(infoHash);
     return this.getFilesFromMagnet(magnet, infoHash);
   }
 
+  // CORREÇÃO: Agora aceita Buffer real e faz upload do .torrent
   async getFilesFromBuffer(buffer, infoHash){
-    const magnet = this.#buildMagnet(infoHash);
-    return this.getFilesFromMagnet(magnet, infoHash);
-  }
-
-  async getFilesFromMagnet(magnet, infoHash){
-    // Tenta adicionar
-    const torrentId = await this.#addToTorbox(magnet);
+    const formData = new FormData();
+    const blob = new Blob([buffer], { type: 'application/x-bittorrent' });
+    formData.append('file', blob, 'torrent.torrent');
+    
+    // Tenta adicionar via arquivo
+    const torrentId = await this.#addToTorbox(formData, true);
     
     if (!torrentId) {
-        // Fallback: busca pelo hash se já existe
-        console.log(`[Torbox] ID não retornado ou duplicado. Buscando hash ${infoHash}...`);
-        const foundId = await this.#searchTorrentIdByHash(infoHash, true);
-        if(foundId) return this.#waitForTorrentReady(foundId);
-        
-        throw new Error('Falha ao adicionar torrent ao Torbox.');
+        // Fallback: se o arquivo falhar, tenta magnet
+        console.log(`[Torbox] Upload de arquivo falhou, tentando magnet para ${infoHash}...`);
+        const magnet = this.#buildMagnet(infoHash);
+        return this.getFilesFromMagnet(magnet, infoHash);
     }
 
-    // Aguarda processamento
     return this.#waitForTorrentReady(torrentId);
   }
 
-  async #addToTorbox(magnetLink) {
-    const body = new URLSearchParams();
-    body.append('magnet', magnetLink);
-    body.append('allow_zip', 'false');
+  async getFilesFromMagnet(magnet, infoHash){
+    const body = new FormData();
+    body.append('magnet', magnet);
+    
+    const torrentId = await this.#addToTorbox(body, false);
+    
+    if (!torrentId) {
+        console.log(`[Torbox] ID não retornado. Buscando hash ${infoHash}...`);
+        const foundId = await this.#searchTorrentIdByHash(infoHash, true);
+        if(foundId) return this.#waitForTorrentReady(foundId);
+        throw new Error('Falha ao adicionar torrent ao Torbox.');
+    }
 
+    return this.#waitForTorrentReady(torrentId);
+  }
+
+  // CORREÇÃO: Unificado para aceitar FormData (arquivo ou magnet)
+  async #addToTorbox(formData, isFile = false) {
     try {
-        const res = await this.#request('POST', '/torrents/createtorrent', { body });
+        // Endpoint é o mesmo, mas o conteúdo do FormData muda
+        const res = await this.#request('POST', '/torrents/createtorrent', { body: formData });
         
         if (res?.success) {
             return res.data?.torrent_id || res.data?.id;
         } else if (res?.detail && (res.detail.includes('exists') || res.detail.includes('duplicate'))) {
             return null;
         }
-        console.error(`[Torbox] Erro no create: ${JSON.stringify(res)}`);
+        console.error(`[Torbox] Erro no create (File: ${isFile}): ${JSON.stringify(res)}`);
         return null;
     } catch(e) {
         console.error(`[Torbox] Exception no create: ${e.message}`);
@@ -160,7 +170,8 @@ export default class Torbox {
             const found = res.data.find(t => t.id === id);
             
             if (found) {
-                if (found.download_present === true && found.files && found.files.length > 0) {
+                // Sucesso se tiver arquivos E download_present (ou state 'completed'/'cached')
+                if ((found.download_present === true || found.download_state === 'cached') && found.files && found.files.length > 0) {
                     torrentInfo = found;
                     break;
                 }
@@ -170,7 +181,7 @@ export default class Torbox {
         retries--;
     }
 
-    if (!torrentInfo) throw new Error(`Torbox: Timeout. Torrent não ficou pronto (download_present=false).`);
+    if (!torrentInfo) throw new Error(`Torbox: Timeout. Torrent não ficou pronto.`);
 
     return torrentInfo.files.map(file => ({
         name: file.name,
@@ -209,7 +220,6 @@ export default class Torbox {
   }
 
   #buildMagnet(hash) {
-      // CORREÇÃO 3: Lista de trackers expandida para ajudar em torrents apenas-hash
       const trackers = [
           'udp://tracker.opentrackr.org:1337/announce',
           'udp://open.stealth.si:80/announce',
@@ -228,6 +238,10 @@ export default class Torbox {
       'Authorization': `Bearer ${this.#apiKey}`,
       'Accept': 'application/json' 
     });
+    // Remove content-type se for FormData para o browser/node setar boundary
+    if (opts.body instanceof FormData) {
+        delete headers['Content-Type']; 
+    }
     
     const queryParams = new URLSearchParams(opts.query || {}).toString();
     const url = `https://api.torbox.app/v1/api${path}?${queryParams}`;
