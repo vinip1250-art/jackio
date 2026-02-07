@@ -34,13 +34,6 @@ function detectMulti(torrent) {
     || /multi/.test((torrent.name || '').toLowerCase());
 }
 
-/**
- * score:
- *  3 = PT-BR real
- *  2 = multi áudio
- *  1 = outros idiomas selecionados
- *  0 = restante
- */
 function languageScore(torrent, preferredLangs) {
   if (detectPtBr(torrent)) return 3;
   if (detectMulti(torrent)) return 2;
@@ -64,7 +57,9 @@ function reorderByLanguage(torrents, preferredLangs, debug = false) {
     .map(o => o.t);
 }
 
-/* ========================================================= */
+/* =========================================================
+ * TORRENTS
+ * ======================================================= */
 
 const actionInProgress = {
   getTorrents: {},
@@ -94,10 +89,6 @@ function searchEpisodeFile(files, season, episode) {
     || files[0];
 }
 
-/* =========================================================
- * TORRENTS
- * ======================================================= */
-
 async function getTorrents(userConfig, metaInfos, debridInstance) {
   const { stremioId, type, season, episode, year } = metaInfos;
 
@@ -115,16 +106,11 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       sortUncached,
       indexerTimeoutSec = 4,
       languages = [],
+      indexers: userIndexers, // Pega a config do usuário
       debug
     } = userConfig;
 
     languages = normalizeLanguages(languages);
-
-    if (debug) {
-      console.log(
-        `[SEARCH] ${stremioId} | langs=${languages.length ? languages.join(',') : 'default'}`
-      );
-    }
 
     const filterSearch = t => {
       if (!qualities.includes(t.quality)) return false;
@@ -133,8 +119,9 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       return !t.year || t.year === year;
     };
 
+    // CORREÇÃO 1: Filtrar indexadores baseado na config do usuário
     let indexers = (await jackett.getIndexers())
-      .filter(i => i.searching[type].available);
+      .filter(i => i.searching[type].available && (userIndexers.includes('all') || userIndexers.includes(i.id)));
 
     if (debug) {
       console.log(`[INDEXERS] ${indexers.map(i => i.title).join(', ')}`);
@@ -184,18 +171,30 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         torrents.filter(t => t.infos?.infoHash)
       )).map(t => ({ ...t, isCached: true }));
 
-      const uncached = torrents.filter(t => !cached.find(c => c.id === t.id));
+      // CORREÇÃO 4: Lógica para Hybrid (RD + TB) em itens não cacheados
+      let uncached = torrents.filter(t => !cached.find(c => c.id === t.id));
+      
+      if (debridInstance.constructor.id === 'hybrid') {
+        // Se for Hybrid, duplicamos a lista de uncached para oferecer as duas opções
+        const rdUncached = uncached.map(t => ({
+          ...t, 
+          id: `rd:${t.id}`, 
+          shortName: 'RD',
+          name: `[RD] ${t.name}` // Opcional: marca visualmente
+        }));
+        const tbUncached = uncached.map(t => ({
+          ...t, 
+          id: `tb:${t.id}`, 
+          shortName: 'TB',
+          name: `[TB] ${t.name}` // Opcional: marca visualmente
+        }));
+        uncached = [...rdUncached, ...tbUncached];
+      }
 
       torrents = [
         ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages, debug),
         ...reorderByLanguage(uncached.sort(sortBy(...sortUncached)), languages, debug)
       ].slice(0, maxTorrents);
-    }
-
-    if (debug) {
-      console.log(
-        `[RESULT] total=${torrents.length} | cached=${torrents.filter(t => t.isCached).length}`
-      );
     }
 
     return torrents;
@@ -206,7 +205,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
 }
 
 /* =========================================================
- * STREAMS (FORMATAÇÃO STREMIO – 3 COLUNAS)
+ * STREAMS
  * ======================================================= */
 
 function getFile(files, type, season, episode) {
@@ -252,14 +251,14 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
 }
 
 /* =========================================================
- * DOWNLOAD (upstream)
+ * DOWNLOAD
  * ======================================================= */
 
 export async function getDownload(userConfig, type, stremioId, torrentId) {
   userConfig = await mergeDefaultUserConfig(userConfig);
   const debridInstance = debrid.instance(userConfig);
 
-  let cleanId = torrentId.includes(':')
+  let cleanId = torrentId.includes(':') && (torrentId.startsWith('rd:') || torrentId.startsWith('tb:'))
     ? torrentId.split(':').slice(1).join(':')
     : torrentId;
 
@@ -270,7 +269,14 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   let download = await cache.get(cacheKey);
   if (download) return download;
 
-  let files = await debridInstance.getFilesFromHash(infos.infoHash);
+  // CORREÇÃO 3: Usar getFilesFromMagnet se disponível para preservar trackers (Torbox)
+  let files;
+  if (infos.magnetUrl) {
+    files = await debridInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
+  } else {
+    files = await debridInstance.getFilesFromHash(infos.infoHash);
+  }
+
   download = await debridInstance.getDownload(
     getFile(files, type, season, episode)
   );
