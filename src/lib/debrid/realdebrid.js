@@ -45,7 +45,6 @@ export default class RealDebrid {
         // Tenta método rápido
         return await this.#checkInstantAvailability(items);
     } catch (e) {
-        // Se falhar (Erro 37), usa fallback
         if (e.message.includes('disabled_endpoint') || e.message.includes('error_code":37')) {
             console.log("RD: Endpoint 'instantAvailability' desativado. Usando fallback lento.");
             return await this.#checkByAddMagnet(items);
@@ -73,42 +72,69 @@ export default class RealDebrid {
     return items.filter(item => cachedHashes.has(item.hash)).map(item => item.original);
   }
 
-  // FALLBACK ROBUSTO
+  // --- FALLBACK COM DEBUG E POLLING ---
   async #checkByAddMagnet(items) {
-    // Verifica Top 5 (mais prováveis) para não travar
+    // Verifica apenas Top 5 para não bloquear
     const topItems = items.slice(0, 5); 
     const cachedHashes = new Set();
-    const limit = pLimit(2); // Concorrência 2 (equilíbrio entre velocidade e segurança)
+    const limit = pLimit(1); // Um por um para garantir leitura dos logs
+
+    console.log(`[RD-DEBUG] Iniciando verificação lenta de ${topItems.length} itens...`);
 
     await Promise.all(topItems.map(item => limit(async () => {
         if (!item.magnet) return;
+        let torrentId = null;
+
         try {
+            // 1. Adiciona Magnet
             const body = new FormData();
             body.append('magnet', item.magnet);
             const addRes = await this.#request('POST', `/torrents/addMagnet`, {body});
             
             if (addRes && addRes.id) {
-                const torrentId = addRes.id;
+                torrentId = addRes.id;
+                console.log(`[RD-DEBUG] Magnet Adicionado: ${torrentId} (Hash: ${item.hash.substring(0,6)}...)`);
+                
+                // 2. Verifica Status Inicial
                 let infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
 
+                // 3. Seleciona arquivos se necessário
                 if (infoRes.status === 'waiting_files_selection') {
                     const selectBody = new FormData();
                     selectBody.append('files', 'all'); 
                     await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {body: selectBody});
-                    
-                    // IMPORTANTE: Aguarda 1s para o RD processar
-                    await wait(1000); 
-                    
+                }
+
+                // 4. LOOP DE TENTATIVAS (POLLING)
+                // Tenta 3 vezes, esperando 1s entre elas
+                let isCached = false;
+                for (let i = 1; i <= 3; i++) {
+                    await wait(1000); // Espera 1s
                     infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
+                    
+                    console.log(`[RD-DEBUG] [${torrentId}] Tentativa ${i}: Status=${infoRes.status}, Progress=${infoRes.progress}%`);
+
+                    if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
+                        isCached = true;
+                        break; // Achou! Sai do loop
+                    }
                 }
 
-                if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
+                if (isCached) {
+                    console.log(`[RD-DEBUG] [${torrentId}] CACHE ENCONTRADO!`);
                     cachedHashes.add(item.hash);
+                } else {
+                    console.log(`[RD-DEBUG] [${torrentId}] Não está em cache após tentativas.`);
                 }
-
-                await this.#request('DELETE', `/torrents/delete/${torrentId}`);
             }
-        } catch (e) {}
+        } catch (e) {
+            console.error(`[RD-DEBUG] Erro item ${item.hash}: ${e.message}`);
+        } finally {
+            // Sempre deleta para limpar a conta
+            if (torrentId) {
+                try { await this.#request('DELETE', `/torrents/delete/${torrentId}`); } catch(e){}
+            }
+        }
     })));
 
     return items
@@ -239,7 +265,6 @@ export default class RealDebrid {
     try { data = await res.json(); }catch(err){ data = {}; }
 
     if(data.error_code){
-      // ERRO 37 Repassado
       if (data.error_code === 37) throw new Error(`{"error":"disabled_endpoint","error_code":37}`);
       
       switch(data.error_code){
