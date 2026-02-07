@@ -28,7 +28,6 @@ export default class RealDebrid {
     this.#ip = userConfig.ip || '';
   }
 
-  // --- CACHE CHECK NATIVO ---
   async getTorrentsCached(torrents){
     const items = torrents.map(t => {
         let hash = t.infos?.infoHash || t.infoHash;
@@ -116,7 +115,6 @@ export default class RealDebrid {
     return this.#getFilesFromTorrent(res.id);
   }
 
-  // --- DOWNLOAD FIX (Proteção contra files vazio) ---
   async getDownload(file){
     let cleanId = file.id;
     if (cleanId.includes(':') && (cleanId.startsWith('rd:') || cleanId.startsWith('tb:'))) {
@@ -129,16 +127,14 @@ export default class RealDebrid {
     let torrent = await this.#request('GET', `/torrents/info/${torrentId}`);
     
     if(torrent.status == 'waiting_files_selection'){
-      // Tenta filtrar vídeos
-      const fileIds = torrent.files.filter(file => isVideo(file.path)).map(file => file.id);
-      
       const body = new FormData();
-      // CORREÇÃO: Se não achou videos (lista vazia), seleciona 'all' para evitar erro
-      if (fileIds.length > 0) {
-          body.append('files', fileIds.join(','));
+      // CORREÇÃO 2: Selecionar APENAS o arquivo solicitado para evitar downloads duplicados
+      if (fileId) {
+          body.append('files', fileId);
       } else {
-          console.log(`RD: Nenhum vídeo detectado automaticamente para ${torrentId}, selecionando 'all'`);
-          body.append('files', 'all');
+          // Fallback seguro caso algo dê errado
+          const fileIds = torrent.files.filter(file => isVideo(file.path)).map(file => file.id);
+          body.append('files', fileIds.length > 0 ? fileIds.join(',') : 'all');
       }
 
       await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {body});
@@ -148,12 +144,6 @@ export default class RealDebrid {
     if(torrent.status == 'magnet_conversion') throw new Error(ERROR.NOT_READY);
 
     const linkIndex = torrent.files.filter(file => file.selected).findIndex(file => file.id == fileId);
-    // Se não achou pelo ID exato, tenta pegar o primeiro selecionado como fallback
-    if (linkIndex === -1) {
-         // console.warn('RD: File ID mismatch, tentando recuperar link...');
-    }
-    
-    // Tenta pegar o link pelo índice ou o primeiro disponível
     const link = torrent.links[linkIndex] || torrent.links[0] || false;
     
     if(!link) throw new Error(`LinkIndex or link not found`);
@@ -163,7 +153,6 @@ export default class RealDebrid {
     const res = await this.#request('POST', '/unrestrict/link', {body});
     return res.download;
   }
-  // ------------------------------------------------
 
   async getUserHash(){
     return createHash('md5').update(this.#apiKey).digest('hex');
