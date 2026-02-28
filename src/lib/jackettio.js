@@ -82,7 +82,7 @@ function searchEpisodeFile(files, season, episode) {
 }
 
 // Regex dos grupos PT-BR — aplicada apenas para torrents do indexador StremThru
-const PT_GROUPS_REGEX = /brremux|cza|freddiegellar|sgf|asc|dual-bioma|dual-c76|fly|tossato|7sprit7|c\.a\.a|c0ral|cbr|dual-nogroup|dual-pia|xor|g4ris|sigma|andrehsa|riper|sigla|sh4down|gjumandi|silveira|tontom|eck|arcanjo|hurtom|bj-share|epik|gusta|crime|universal|maestro|bludv|ingram|dublado|nacional|hdtv-br|bdrip-br|batata|cinefoot|savana|coala|nyne|hmax/i;
+const PT_GROUPS_REGEX = /brremux|cza|freddiegellar|sgf|asc|dual-bioma|dual-c76|fly|tossato|7sprit7|c\.a\.a|c0ral|cbr|dual-nogroup|dual-pia|xor|g4ris|sigma|andrehsa|riper|sigla|sh4down|gjumandi|silveira|tontom|eck|arcanjo|bj-share|epik|gusta|crime|universal|maestro|bludv|ingram|dublado|nacional|hdtv-br|bdrip-br|batata|cinefoot|savana|coala|nyne|hmax/i;
 
 // Seeds mínimos para exibir torrents não cacheados
 const MIN_SEEDS_UNCACHED = 2;
@@ -291,6 +291,14 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   const isHybrid = debridInstance.constructor.id === 'hybrid';
   
   const getFilesForService = async (serviceInstance) => {
+    // CORREÇÃO: Prioriza magnetUrl real antes de tentar baixar .torrent
+    // O magnetUrl do Prowlarr é uma URL HTTP, não um magnet real — verificamos isso em getFilesFromMagnet
+    if (infos.magnetUrl && infos.magnetUrl.startsWith('magnet:')) {
+        console.log(`[jackettio] Usando magnetUrl real: ${infos.magnetUrl.slice(0, 60)}...`);
+        return await serviceInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
+    }
+
+    // Tenta baixar o arquivo .torrent via link HTTP
     if (infos.link && !infos.link.startsWith('magnet:')) {
         try {
             console.log(`Baixando .torrent de: ${infos.link}`);
@@ -303,7 +311,8 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
             console.error('Falha ao baixar .torrent, fallback para magnet:', e.message);
         }
     }
-    
+
+    // Fallback: usa magnetUrl (mesmo que seja URL HTTP — getFilesFromMagnet trata isso)
     if (infos.magnetUrl) {
         return await serviceInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
     } else {
