@@ -91,13 +91,11 @@ export default class Torbox {
     return this.getFilesFromMagnet(magnet, infoHash);
   }
 
-  // CORREÇÃO: Agora aceita Buffer real e faz upload do .torrent
   async getFilesFromBuffer(buffer, infoHash){
     const formData = new FormData();
     const blob = new Blob([buffer], { type: 'application/x-bittorrent' });
     formData.append('file', blob, 'torrent.torrent');
     
-    // Tenta adicionar via arquivo
     const torrentId = await this.#addToTorbox(formData, true);
     
     if (!torrentId) {
@@ -111,6 +109,16 @@ export default class Torbox {
   }
 
   async getFilesFromMagnet(magnet, infoHash){
+    // Se não for magnet real (ex: URL HTTP do Prowlarr), constrói um a partir do hash
+    if (!magnet || !magnet.startsWith('magnet:')) {
+        console.log(`[Torbox] magnetUrl não é magnet real, usando hash: ${infoHash}`);
+        if (infoHash) {
+            magnet = this.#buildMagnet(infoHash);
+        } else {
+            throw new Error('Sem magnet válido nem infoHash disponível.');
+        }
+    }
+
     const body = new FormData();
     body.append('magnet', magnet);
     
@@ -126,10 +134,8 @@ export default class Torbox {
     return this.#waitForTorrentReady(torrentId);
   }
 
-  // CORREÇÃO: Unificado para aceitar FormData (arquivo ou magnet)
   async #addToTorbox(formData, isFile = false) {
     try {
-        // Endpoint é o mesmo, mas o conteúdo do FormData muda
         const res = await this.#request('POST', '/torrents/createtorrent', { body: formData });
         
         if (res?.success) {
@@ -160,7 +166,7 @@ export default class Torbox {
   }
 
   async #waitForTorrentReady(id){
-    let retries = 30; 
+    let retries = 60; // 60 × 2000ms = 2 minutos
     let torrentInfo = null;
 
     while(retries > 0) {
@@ -170,14 +176,20 @@ export default class Torbox {
             const found = res.data.find(t => t.id === id);
             
             if (found) {
-                // Sucesso se tiver arquivos E download_present (ou state 'completed'/'cached')
+                console.log(`[Torbox] Torrent ${id} state=${found.download_state} progress=${found.progress} files=${found.files?.length || 0}`);
+
                 if ((found.download_present === true || found.download_state === 'cached') && found.files && found.files.length > 0) {
                     torrentInfo = found;
                     break;
                 }
+
+                // Estado de erro — não adianta esperar
+                if (['error', 'stalled', 'missingFiles'].includes(found.download_state)) {
+                    throw new Error(`Torbox: Torrent em estado de erro: ${found.download_state}`);
+                }
             }
         }
-        await wait(1500);
+        await wait(2000); // 2s entre tentativas
         retries--;
     }
 
@@ -238,7 +250,6 @@ export default class Torbox {
       'Authorization': `Bearer ${this.#apiKey}`,
       'Accept': 'application/json' 
     });
-    // Remove content-type se for FormData para o browser/node setar boundary
     if (opts.body instanceof FormData) {
         delete headers['Content-Type']; 
     }
