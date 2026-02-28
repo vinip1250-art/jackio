@@ -157,6 +157,15 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       )).flat();
     }
 
+    // DEBUG TEMPORÁRIO - remover depois
+console.log('[DEBUG STREMTHRU]', JSON.stringify(torrents.slice(0, 5).map(t => ({
+  name: t.name?.slice(0, 80),
+  indexerName: t.indexerName,
+  indexerId: t.indexerId,
+  indexer: t.indexer,
+  tracker: t.Tracker || t.tracker
+})), null, 2));
+    
     torrents = torrents
       .filter(filterSearch)
       .filter(t => {
