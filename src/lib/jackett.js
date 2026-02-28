@@ -231,12 +231,13 @@ function normalizeItems(items, clientId){
       seeders: parseInt(attr.seeders || 0),
       peers: parseInt(attr.peers || 0),
       infoHash: infoHash,
-      magneturl: magnet, 
+      magnetUrl: magnet,
+      magneturl: magnet,
       type: item.type,
       quality: quality ? parseInt(quality[1]) : 0,
       year: year ? parseInt(year.pop()) : 0,
       languages: config.languages.filter(lang => title.match(lang.pattern)),
-      details: extractDetails(item.title) // Injeta os detalhes
+      details: extractDetails(item.title)
     };
   });
 }
@@ -268,8 +269,14 @@ function normalizeProwlarrItems(items){
     const title = parseWords(item.title).join(' ');
     const year = item.title.replace(quality ? quality[1] : '', '').match(/(19|20[\d]{2})/);
     
-    const guid = item.downloadUrl || item.magnetUrl || item.infoHash;
+    const guid = item.guid || item.downloadUrl || item.magnetUrl || item.infoHash;
     let infoHash = item.infoHash || extractHash(item.magnetUrl || item.downloadUrl);
+
+    // Preserva downloadUrl separado do magnetUrl
+    const downloadUrl = item.downloadUrl && !item.downloadUrl.startsWith('magnet:') 
+      ? item.downloadUrl 
+      : '';
+    const magnetUrl = item.magnetUrl || (item.downloadUrl?.startsWith('magnet:') ? item.downloadUrl : '') || '';
 
     return {
       name: item.title,
@@ -277,16 +284,17 @@ function normalizeProwlarrItems(items){
       indexerId: item.indexer,
       id: crypto.createHash('sha1').update(guid).digest('hex'),
       size: parseInt(item.size),
-      link: item.downloadUrl || item.magnetUrl,
+      link: downloadUrl,         // .torrent file URL (para trackers privados)
+      magnetUrl: magnetUrl,      // magnet link (U maiúsculo — compatível com torrentInfos.js)
+      magneturl: magnetUrl,      // mantém lowercase também por compatibilidade
       seeders: item.seeders || 0,
       peers: item.leechers || 0,
       infoHash: infoHash,
-      magneturl: item.magnetUrl || item.downloadUrl || '', 
-      type: 'movie', 
+      type: item.protocol === 'torrent' && item.indexerFlags?.includes('private') ? 'private' : 'public',
       quality: quality ? parseInt(quality[1]) : 0,
       year: year ? parseInt(year.pop()) : 0,
       languages: config.languages.filter(lang => title.match(lang.pattern)),
-      details: extractDetails(item.title) // Injeta os detalhes
+      details: extractDetails(item.title)
     };
   });
 }
