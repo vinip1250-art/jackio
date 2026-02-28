@@ -84,6 +84,9 @@ function searchEpisodeFile(files, season, episode) {
     || files[0];
 }
 
+// Regex dos grupos PT-BR — aplicada apenas para torrents do indexador StremThru
+const PT_GROUPS_REGEX = /brremux|cza|freddiegellar|sgf|asc|dual-bioma|dual-c76|fly|tossato|7sprit7|c\.a\.a|c0ral|cbr|dual-nogroup|pia|xor|g4ris|sigma|andrehsa|riper|sigla|sh4down|gjumandi|silveira|tontom|eck|arcanjo/i;
+
 async function getTorrents(userConfig, metaInfos, debridInstance) {
   const { stremioId, type, season, episode, year } = metaInfos;
 
@@ -154,7 +157,16 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       )).flat();
     }
 
-    torrents = torrents.filter(filterSearch).sort(sortBy('seeders', true));
+    torrents = torrents
+      .filter(filterSearch)
+      .filter(t => {
+        const isStremThru = (t.indexerName || t.indexerId || t.indexer || '').toLowerCase().includes('stremthru');
+        if (isStremThru) {
+          return PT_GROUPS_REGEX.test(t.name || '');
+        }
+        return true;
+      })
+      .sort(sortBy('seeders', true));
 
     torrents = reorderByLanguage(torrents, languages, debug)
       .slice(0, maxTorrents + 3);
@@ -178,9 +190,6 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
 
       // CORREÇÃO CRÍTICA NA LÓGICA DE UNCACHED
       let uncached = torrents.filter(t => {
-          // Verifica se este torrent (t) já está presente na lista 'cached'.
-          // No modo Hybrid, 'c.id' tem prefixo (ex: rd:123), mas 't.id' é puro (123).
-          // Temos que verificar se o ID original está contido.
           return !cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
       });
       
