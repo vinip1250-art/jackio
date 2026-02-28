@@ -236,7 +236,7 @@ function normalizeItems(items, clientId){
       quality: quality ? parseInt(quality[1]) : 0,
       year: year ? parseInt(year.pop()) : 0,
       languages: config.languages.filter(lang => title.match(lang.pattern)),
-      details: extractDetails(item.title) // Injeta os detalhes
+      details: extractDetails(item.title)
     };
   });
 }
@@ -286,7 +286,7 @@ function normalizeProwlarrItems(items){
       quality: quality ? parseInt(quality[1]) : 0,
       year: year ? parseInt(year.pop()) : 0,
       languages: config.languages.filter(lang => title.match(lang.pattern)),
-      details: extractDetails(item.title) // Injeta os detalhes
+      details: extractDetails(item.title)
     };
   });
 }
