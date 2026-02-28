@@ -82,7 +82,7 @@ function searchEpisodeFile(files, season, episode) {
 }
 
 // Regex dos grupos PT-BR — aplicada apenas para torrents do indexador StremThru
-const PT_GROUPS_REGEX = /brremux|cza|freddiegellar|sgf|asc|dual-bioma|dual-c76|fly|tossato|7sprit7|c\.a\.a|c0ral|cbr|dual-nogroup|dual-pia|xor|g4ris|sigma|andrehsa|riper|sigla|sh4down|gjumandi|silveira|tontom|eck|arcanjo|bj-share|epik|gusta|crime|universal|maestro|bludv|ingram|dublado|nacional|hdtv-br|bdrip-br|batata|cinefoot|savana|coala|nyne|hmax/i;
+const PT_GROUPS_REGEX = /brremux|cza|freddiegellar|sgf|asc|dual-bioma|dual-c76|fly|tossato|7sprit7|c\.a\.a|c0ral|cbr|dual-nogroup|dual-pia|xor|g4ris|sigma|andrehsa|riper|sigla|sh4down|gjumandi|silveira|tontom|eck|arcanjo|hurtom|bj-share|epik|gusta|crime|universal|maestro|bludv|ingram|dublado|nacional|hdtv-br|bdrip-br|batata|cinefoot|savana|coala|nyne|hmax/i;
 
 // Seeds mínimos para exibir torrents não cacheados
 const MIN_SEEDS_UNCACHED = 2;
