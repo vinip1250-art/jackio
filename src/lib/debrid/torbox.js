@@ -2,6 +2,10 @@ import {createHash} from 'crypto';
 import {ERROR} from './const.js';
 import {wait} from '../util.js';
 
+// Lock global por torrentId: evita múltiplos loops de polling paralelos para o mesmo torrent
+// (Stremio dispara 3-4 requisições simultâneas para a mesma URL)
+const _pollLocks = new Map(); // torrentId -> Promise
+
 export default class Torbox { 
 
   static id = 'torbox';
@@ -99,17 +103,16 @@ export default class Torbox {
     const torrentId = await this.#addToTorbox(formData, true);
     
     if (!torrentId) {
-        // Fallback: se o arquivo falhar, tenta magnet
         console.log(`[Torbox] Upload de arquivo falhou, tentando magnet para ${infoHash}...`);
         const magnet = this.#buildMagnet(infoHash);
         return this.getFilesFromMagnet(magnet, infoHash);
     }
 
-    return this.#waitForTorrentReady(torrentId);
+    return this.#waitForTorrentReady(torrentId, infoHash);
   }
 
   async getFilesFromMagnet(magnet, infoHash){
-    // Se não for magnet real (ex: URL HTTP do Prowlarr), constrói um a partir do hash
+    // Se não for magnet real (ex: URL HTTP do Prowlarr), constrói a partir do hash
     if (!magnet || !magnet.startsWith('magnet:')) {
         console.log(`[Torbox] magnetUrl não é magnet real, usando hash: ${infoHash}`);
         if (infoHash) {
@@ -127,11 +130,11 @@ export default class Torbox {
     if (!torrentId) {
         console.log(`[Torbox] ID não retornado. Buscando hash ${infoHash}...`);
         const foundId = await this.#searchTorrentIdByHash(infoHash, true);
-        if(foundId) return this.#waitForTorrentReady(foundId);
+        if(foundId) return this.#waitForTorrentReady(foundId, infoHash);
         throw new Error('Falha ao adicionar torrent ao Torbox.');
     }
 
-    return this.#waitForTorrentReady(torrentId);
+    return this.#waitForTorrentReady(torrentId, infoHash);
   }
 
   async #addToTorbox(formData, isFile = false) {
@@ -165,43 +168,94 @@ export default class Torbox {
     return null;
   }
 
-  async #waitForTorrentReady(id){
-    let retries = 60; // 60 × 2000ms = 2 minutos
-    let torrentInfo = null;
+  /**
+   * CORREÇÃO PRINCIPAL:
+   *
+   * Problema 1 — files=[] durante checking/downloading:
+   *   O TorBox só popula o array `files` DEPOIS que download_present=true (download 100% concluído).
+   *   Durante checking e downloading, files=[] SEMPRE.
+   *   A solução: quando o torrent está em estado ativo (checking/downloading), chamamos
+   *   requestdl com apenas o torrent_id (sem file_id). O TorBox aceita isso e retorna
+   *   o link de streaming progressivo mesmo com download incompleto.
+   *
+   * Problema 2 — múltiplos loops paralelos (Stremio dispara 3-4 requests simultâneos):
+   *   Usamos um lock global por torrentId. Se já existe um poll rodando para esse ID,
+   *   as demais requisições aguardam e reutilizam o mesmo resultado.
+   */
+  async #waitForTorrentReady(id, infoHash){
+    // LOCK: se já existe um poll para este torrentId, aguarda e retorna o mesmo resultado
+    const lockKey = `${this.#apiKey}:${id}`;
+    if (_pollLocks.has(lockKey)) {
+        console.log(`[Torbox] Aguardando poll existente para torrent ${id}...`);
+        return _pollLocks.get(lockKey);
+    }
 
-    while(retries > 0) {
+    const promise = this.#doPoll(id, infoHash).finally(() => {
+        _pollLocks.delete(lockKey);
+    });
+    _pollLocks.set(lockKey, promise);
+    return promise;
+  }
+
+  async #doPoll(id, infoHash) {
+    // Fase 1: aguarda o torrent aparecer e sair do metaDL (máx 60s)
+    // Fase 2: assim que estiver em checking/downloading/cached, retorna imediatamente
+    //         com um "file virtual" baseado no torrent_id para que requestdl funcione.
+
+    let retries = 60; // 60 × 2000ms = 2 minutos máximo
+    const ACTIVE_STATES = new Set(['checking', 'downloading', 'cached', 'completed', 'complete']);
+    const ERROR_STATES = new Set(['error', 'stalled', 'missingFiles', 'dead']);
+
+    while (retries > 0) {
         const res = await this.#request('GET', '/torrents/mylist', { query: { bypass_cache: 'true' } });
         
         if (res?.data) {
             const found = res.data.find(t => t.id === id);
             
             if (found) {
-                console.log(`[Torbox] Torrent ${id} state=${found.download_state} progress=${found.progress} files=${found.files?.length || 0}`);
+                const state = found.download_state || '';
+                const filesCount = found.files?.length || 0;
+                console.log(`[Torbox] Torrent ${id} state=${state} progress=${found.progress || 0} files=${filesCount} download_present=${found.download_present}`);
 
-                if ((found.download_present === true || found.download_state === 'cached') && found.files && found.files.length > 0) {
-                    torrentInfo = found;
-                    break;
+                // Sucesso completo: TorBox já tem o arquivo, usa file_id real
+                if ((found.download_present === true || state === 'cached' || state === 'completed' || state === 'complete') && filesCount > 0) {
+                    console.log(`[Torbox] Torrent ${id} pronto com ${filesCount} arquivo(s)!`);
+                    return found.files.map(file => ({
+                        name: file.name,
+                        size: file.size,
+                        id: `${id}:${file.id}`,
+                        url: '',
+                        ready: true
+                    }));
+                }
+
+                // Estado ativo sem files ainda: retorna "file virtual" para usar requestdl sem file_id
+                // O TorBox suporta requestdl com só torrent_id para torrents de arquivo único
+                if (ACTIVE_STATES.has(state) && filesCount === 0) {
+                    const fileName = infoHash
+                        ? `torrent_${infoHash.slice(0, 8)}.mkv`
+                        : `torrent_${id}.mkv`;
+                    console.log(`[Torbox] Torrent ${id} em ${state}, usando requestdl sem file_id (streaming progressivo)`);
+                    return [{
+                        name: fileName,
+                        size: found.size || 0,
+                        id: `${id}:`, // file_id vazio = requestdl usa só torrent_id
+                        url: '',
+                        ready: false
+                    }];
                 }
 
                 // Estado de erro — não adianta esperar
-                if (['error', 'stalled', 'missingFiles'].includes(found.download_state)) {
-                    throw new Error(`Torbox: Torrent em estado de erro: ${found.download_state}`);
+                if (ERROR_STATES.has(state)) {
+                    throw new Error(`Torbox: Torrent em estado de erro: ${state}`);
                 }
             }
         }
-        await wait(2000); // 2s entre tentativas
+        await wait(2000);
         retries--;
     }
 
-    if (!torrentInfo) throw new Error(`Torbox: Timeout. Torrent não ficou pronto.`);
-
-    return torrentInfo.files.map(file => ({
-        name: file.name,
-        size: file.size,
-        id: `${torrentInfo.id}:${file.id}`,
-        url: '', 
-        ready: true
-    }));
+    throw new Error(`Torbox: Timeout. Torrent não ficou pronto.`);
   }
 
   async getDownload(file){
@@ -211,14 +265,20 @@ export default class Torbox {
          if(parts.length > 2) cleanId = parts.slice(-2).join(':');
     }
     
-    const [torrentId, fileId] = cleanId.split(':');
+    const parts = cleanId.split(':');
+    const torrentId = parts[0];
+    const fileId = parts[1] || ''; // pode ser vazio para torrents de arquivo único
     
     const query = { 
         token: this.#apiKey, 
-        torrent_id: torrentId, 
-        file_id: fileId, 
-        zip: 'false' 
+        torrent_id: torrentId,
+        zip: 'false'
     };
+
+    // Só inclui file_id se tiver um valor real
+    if (fileId) {
+        query.file_id = fileId;
+    }
 
     try {
         const res = await this.#request('GET', '/torrents/requestdl', { query });
