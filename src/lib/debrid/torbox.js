@@ -100,7 +100,7 @@ export default class Torbox {
     const blob = new Blob([buffer], { type: 'application/x-bittorrent' });
     formData.append('file', blob, 'torrent.torrent');
     
-    const torrentId = await this.#addToTorbox(formData, true);
+    const torrentId = await this.#addFileToTorbox(formData);
     
     if (!torrentId) {
         console.log(`[Torbox] Upload de arquivo falhou, tentando magnet para ${infoHash}...`);
@@ -122,10 +122,7 @@ export default class Torbox {
         }
     }
 
-    const body = new FormData();
-    body.append('magnet', magnet);
-    
-    const torrentId = await this.#addToTorbox(body, false);
+    const torrentId = await this.#addMagnetToTorbox(magnet);
     
     if (!torrentId) {
         console.log(`[Torbox] ID não retornado. Buscando hash ${infoHash}...`);
@@ -137,19 +134,46 @@ export default class Torbox {
     return this.#waitForTorrentReady(torrentId, infoHash);
   }
 
-  async #addToTorbox(formData, isFile = false) {
+  // Usa URLSearchParams (form-urlencoded) com allow_zip=false —
+  // imita exatamente o envio manual pelo browser, necessário para trackers privados
+  // (CapybaraBR, AmigosshareClub etc.) que rejeitam multipart/form-data
+  async #addMagnetToTorbox(magnetLink) {
+    const body = new URLSearchParams();
+    body.append('magnet', magnetLink);
+    body.append('allow_zip', 'false');
+
+    try {
+        const res = await this.#request('POST', '/torrents/createtorrent', { body });
+        
+        if (res?.success) {
+            return res.data?.torrent_id || res.data?.id;
+        } else if (res?.detail && (res.detail.includes('exists') || res.detail.includes('duplicate'))) {
+            console.log(`[Torbox] Torrent já existe.`);
+            return null;
+        }
+        console.error(`[Torbox] Erro no create: ${JSON.stringify(res)}`);
+        return null;
+    } catch(e) {
+        console.error(`[Torbox] Exception no create: ${e.message}`);
+        return null;
+    }
+  }
+
+  // Upload de arquivo .torrent via multipart/form-data (fluxo do getFilesFromBuffer)
+  async #addFileToTorbox(formData) {
     try {
         const res = await this.#request('POST', '/torrents/createtorrent', { body: formData });
         
         if (res?.success) {
             return res.data?.torrent_id || res.data?.id;
         } else if (res?.detail && (res.detail.includes('exists') || res.detail.includes('duplicate'))) {
+            console.log(`[Torbox] Torrent já existe.`);
             return null;
         }
-        console.error(`[Torbox] Erro no create (File: ${isFile}): ${JSON.stringify(res)}`);
+        console.error(`[Torbox] Erro no create (arquivo): ${JSON.stringify(res)}`);
         return null;
     } catch(e) {
-        console.error(`[Torbox] Exception no create: ${e.message}`);
+        console.error(`[Torbox] Exception no create (arquivo): ${e.message}`);
         return null;
     }
   }
@@ -311,8 +335,9 @@ export default class Torbox {
       'Accept': 'application/json' 
     });
     if (opts.body instanceof FormData) {
-        delete headers['Content-Type']; 
+        delete headers['Content-Type']; // deixa o browser setar boundary do multipart
     }
+    // URLSearchParams define seu próprio Content-Type automaticamente (application/x-www-form-urlencoded)
     
     const queryParams = new URLSearchParams(opts.query || {}).toString();
     const url = `https://api.torbox.app/v1/api${path}?${queryParams}`;
