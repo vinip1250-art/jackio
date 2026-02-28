@@ -8,9 +8,6 @@ import * as jackett from './jackett.js';
 import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
 
-// ... (códigos auxiliares de idioma e config sem alterações) ...
-// Copie o início do arquivo anterior até chegar em getTorrents
-
 const PTBR_KEYWORDS = [
   'pt-br', 'ptbr', 'portuguese', 'português',
   'brazilian', 'brasileiro', 'brasil',
@@ -85,8 +82,10 @@ function searchEpisodeFile(files, season, episode) {
 }
 
 // Regex dos grupos PT-BR — aplicada apenas para torrents do indexador StremThru
+const PT_GROUPS_REGEX = /brremux|cza|freddiegellar|sgf|asc|dual-bioma|dual-c76|fly|tossato|7sprit7|c\.a\.a|c0ral|cbr|dual-nogroup|dual-pia|xor|g4ris|sigma|andrehsa|riper|sigla|sh4down|gjumandi|silveira|tontom|eck|arcanjo|hurtom|bj-share|epik|gusta|crime|universal|maestro|bludv|ingram|dublado|nacional|hdtv-br|bdrip-br|batata|cinefoot|savana|coala|nyne|hmax/i;
 
-const PT_GROUPS_REGEX = /brremux|cza|freddiegellar|sgf|asc|dual-bioma|dual-c76|fly|tossato|7sprit7|c\.a\.a|c0ral|cbr|dual-nogroup|dual-pia|xor|g4ris|sigma|andrehsa|riper|sigla|sh4down|gjumandi|silveira|tontom|eck|arcanjo|bj-share|epik|gusta|crime|universal|maestro|bludv|ingram|dublado|nacional|hdtv-br|bdrip-br|batata|cinefoot|savana|coala|nyne|hmax/i;
+// Seeds mínimos para exibir torrents não cacheados
+const MIN_SEEDS_UNCACHED = 2;
 
 async function getTorrents(userConfig, metaInfos, debridInstance) {
   const { stremioId, type, season, episode, year } = metaInfos;
@@ -158,19 +157,11 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       )).flat();
     }
 
-    // DEBUG TEMPORÁRIO - remover depois
-console.log('[DEBUG STREMTHRU]', JSON.stringify(torrents.slice(0, 5).map(t => ({
-  name: t.name?.slice(0, 80),
-  indexerName: t.indexerName,
-  indexerId: t.indexerId,
-  indexer: t.indexer,
-  tracker: t.Tracker || t.tracker
-})), null, 2));
-    
     torrents = torrents
       .filter(filterSearch)
       .filter(t => {
-        const isStremThru = (t.indexerName || t.indexerId || t.indexer || '').toLowerCase().includes('stremthru');
+        const indexer = (t.indexerName || t.indexerId || t.indexer || '').toLowerCase().trim();
+        const isStremThru = indexer.includes('stremthru');
         if (isStremThru) {
           return PT_GROUPS_REGEX.test(t.name || '');
         }
@@ -198,9 +189,16 @@ console.log('[DEBUG STREMTHRU]', JSON.stringify(torrents.slice(0, 5).map(t => ({
         torrents.filter(t => t.infos?.infoHash)
       )).map(t => ({ ...t, isCached: true }));
 
-      // CORREÇÃO CRÍTICA NA LÓGICA DE UNCACHED
       let uncached = torrents.filter(t => {
-          return !cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
+        const notCached = !cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
+        if (!notCached) return false;
+
+        // Bloqueia torrents privados — TorBox não consegue baixar sem credenciais do tracker
+        const isPrivate = t.type === 'private' || t.infos?.private === true;
+        if (isPrivate) return false;
+
+        // Exige seeds mínimos para não travar o TorBox tentando torrents mortos
+        return (t.seeders || 0) >= MIN_SEEDS_UNCACHED;
       });
       
       if (debridInstance.constructor.id === 'hybrid') {
@@ -289,7 +287,6 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   let download = await cache.get(cacheKey);
   if (download) return download;
 
-  // === LÓGICA DE ROTEAMENTO E UPLOAD DE .TORRENT ===
   let files;
   const isHybrid = debridInstance.constructor.id === 'hybrid';
   
