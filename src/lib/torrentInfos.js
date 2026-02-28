@@ -129,6 +129,15 @@ async function setById(id, infos){
 
 }
 
+// DEBUG TEMPORÁRIO
+  console.log('[DEBUG TORRENTINFOS GET]', JSON.stringify({
+    id, link, magnetUrl, infoHash, name, size, type
+  }, null, 2));
+
+  try {
+    return await getById(id);
+  }catch(err){}
+
 export async function getTorrentFile(infos){
 
   if(infos.torrentLocation){
