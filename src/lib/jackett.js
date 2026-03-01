@@ -87,30 +87,65 @@ async function searchAllClients(query) {
           const params = new URLSearchParams();
           params.append('apikey', client.apiKey);
 
-          if (query.cat === CATEGORY.MOVIE) {
-            params.append('type', 'movie');
-          } else if (query.cat === CATEGORY.SERIES) {
-            params.append('type', 'tvSearch');
-            const q = query.q || '';
-            const sMatch = q.match(/S(\d+)/i);
-            const eMatch = q.match(/E(\d+)/i);
-            if (sMatch) params.append('seasonNumber', parseInt(sMatch[1]));
-            if (eMatch) params.append('episodeNumber', parseInt(eMatch[1]));
+          const isSeries = query.cat === CATEGORY.SERIES;
+          const isMovie = query.cat === CATEGORY.MOVIE;
+
+          // Tenta busca específica (tvSearch/movie) primeiro, com fallback para search genérico
+          // Necessário porque indexadores como StremThru/Zilean não suportam tvSearch
+          const attemptSearch = async (useGeneric) => {
+            const p = new URLSearchParams();
+            p.append('apikey', client.apiKey);
+
+            if (useGeneric || (!isSeries && !isMovie)) {
+              p.append('type', 'search');
+              // Na busca genérica mantém S01E01 na query para que o indexador filtre
+              if (query.q) p.append('query', query.q);
+            } else if (isMovie) {
+              p.append('type', 'movie');
+              if (query.q) p.append('query', query.q);
+            } else {
+              // tvSearch: envia season/episode como parâmetros e query sem SxxExx
+              p.append('type', 'tvSearch');
+              const q = query.q || '';
+              const sMatch = q.match(/S(\d+)/i);
+              const eMatch = q.match(/E(\d+)/i);
+              if (sMatch) p.append('seasonNumber', parseInt(sMatch[1]));
+              if (eMatch) p.append('episodeNumber', parseInt(eMatch[1]));
+              let cleanQuery = q.replace(/S\d+E\d+/i, '').replace(/S\d+/i, '').trim();
+              if (cleanQuery) p.append('query', cleanQuery);
+            }
+
+            if (specificIndexerId !== 'all') p.append('indexerIds', specificIndexerId);
+
+            const url = `${client.url}/api/v1/search?${p.toString()}`;
+            console.log(`[Prowlarr] GET ${url}`);
+            const res = await fetch(url);
+            const json = await res.json();
+
+            // Prowlarr retorna objeto com "message" quando há erro
+            if (!Array.isArray(json)) {
+              console.warn(`[Prowlarr] Resposta não é array (indexer=${specificIndexerId}):`, json?.message || JSON.stringify(json).slice(0, 200));
+              return null; // sinaliza falha
+            }
+            console.log(`[Prowlarr] resultados: ${json.length}`);
+            return json;
+          };
+
+          let json = null;
+
+          if (isSeries) {
+            // Tenta tvSearch primeiro; se falhar (erro ou 0 resultados com erro), usa search genérico
+            json = await attemptSearch(false);
+            if (json === null) {
+              console.log(`[Prowlarr] tvSearch falhou, tentando search genérico...`);
+              json = await attemptSearch(true);
+            }
           } else {
-            params.append('type', 'search');
+            json = await attemptSearch(false);
+            if (json === null) json = [];
           }
 
-          let cleanQuery = query.q || '';
-          cleanQuery = cleanQuery.replace(/S\d+E\d+/i, '').replace(/S\d+/i, '').trim();
-          if (cleanQuery) params.append('query', cleanQuery);
-
-          if (specificIndexerId !== 'all') params.append('indexerIds', specificIndexerId);
-
-          const url = `${client.url}/api/v1/search?${params.toString()}`;
-          console.log(`[Prowlarr] GET ${url}`);
-          const json = await (await fetch(url)).json();
-          console.log(`[Prowlarr] resultados: ${Array.isArray(json) ? json.length : JSON.stringify(json)}`);
-          return normalizeProwlarrItems(json, query.cat);
+          return normalizeProwlarrItems(json || [], query.cat);
         }
       }
     } catch (e) {
