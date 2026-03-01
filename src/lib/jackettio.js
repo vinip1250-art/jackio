@@ -99,7 +99,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       maxTorrents,
       sortCached,
       sortUncached,
-      indexerTimeoutSec = 4,
+      indexerTimeoutSec = 25,
       languages = [],
       indexers: userIndexers,
       debug
