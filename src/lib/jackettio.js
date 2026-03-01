@@ -185,6 +185,13 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       }))
     )).filter(Boolean);
 
+    console.log(`[DEBUG infos] ${torrents.length} torrents com infos:`, torrents.map(t => ({
+      name: t.name.slice(0, 60),
+      infoHash: t.infos?.infoHash || 'VAZIO',
+      private: t.infos?.private,
+      seeders: t.seeders
+    })));
+
     if (debridInstance) {
       const cached = (await debridInstance.getTorrentsCached(
         torrents.filter(t => t.infos?.infoHash)
@@ -208,6 +215,8 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         uncached = [...rdUncached, ...tbUncached];
       }
 
+      console.log(`[DEBUG cache] cached=${cached.length} uncached=${uncached.length}`);
+      
       torrents = [
         ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages, debug),
         ...reorderByLanguage(uncached.sort(sortBy(...sortUncached)), languages, debug)
