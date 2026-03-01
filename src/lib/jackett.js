@@ -114,37 +114,19 @@ async function searchAllClients(query) {
           let json = null;
 
           if (isSeries) {
-            const q = query.q || '';
-            // Tenta tvSearch com season/episode como parâmetros
-            const cleanQ = q.replace(/S\d+E\d+/i, '').replace(/S\d+/i, '').trim();
-            const sMatch = q.match(/S(\d+)/i);
-            const eMatch = q.match(/E(\d+)/i);
-            const tvParams = {};
-            if (sMatch) tvParams.seasonNumber = parseInt(sMatch[1]);
-            if (eMatch) tvParams.episodeNumber = parseInt(eMatch[1]);
-
-            json = await doSearch('tvSearch', cleanQ, tvParams);
-
-            // Fallback 1: search genérico com S01E01 na query (para indexadores Torznab como StremThru)
-            if (json === null || json.length === 0) {
-              console.log(`[Prowlarr] tvSearch sem resultado, tentando search genérico com ${q}...`);
-              json = await doSearch('search', q);
-            }
-
-            // Fallback 2: search só com o nome (sem S01E01), para indexadores que não entendem o padrão
-            if (json === null || json.length === 0) {
-              console.log(`[Prowlarr] search genérico sem resultado, tentando só o nome...`);
-              json = await doSearch('search', cleanQ || q);
-            }
-
+            // Usa sempre type=search com S01E01 na query — compatível com todos os indexadores
+            // incluindo StremThru/Torznab que rejeitam tvSearch.
+            // CapybaraBR e outros também funcionam com search genérico.
+            json = await doSearch('search', query.q);
+            if (json === null) json = [];
           } else if (isMovie) {
             json = await doSearch('movie', query.q);
-            if (json === null) json = await doSearch('search', query.q);
+            if (json === null) json = await doSearch('search', query.q) ?? [];
           } else {
-            json = await doSearch('search', query.q);
+            json = await doSearch('search', query.q) ?? [];
           }
 
-          return normalizeProwlarrItems(json || [], query.cat);
+          return normalizeProwlarrItems(json, query.cat);
         }
       }
     } catch (e) {
