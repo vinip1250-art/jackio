@@ -28,11 +28,6 @@ export async function cleanTorrentFolder(){
 
 export async function get({link, id, magnetUrl, infoHash, name, size, type}){
 
-  // DEBUG TEMPORÁRIO - remover depois
-  console.log('[DEBUG TORRENTINFOS GET]', JSON.stringify({
-    id, link, magnetUrl, infoHash, name, size, type
-  }, null, 2));
-
   try {
     return await getById(id);
   }catch(err){}
@@ -51,7 +46,7 @@ export async function get({link, id, magnetUrl, infoHash, name, size, type}){
 
   }else{
 
-    if(link.startsWith('http')){
+  if(link && link.startsWith('http')){
 
       try {
 
@@ -68,6 +63,9 @@ export async function get({link, id, magnetUrl, infoHash, name, size, type}){
         torrentLocation = '';
         if(err.redirection && err.redirection.startsWith('magnet')){
           link = err.redirection;
+        }else if(magnetUrl && magnetUrl.startsWith('magnet:')){
+          // Prowlarr: download falhou mas temos magnetUrl — usa diretamente
+          link = magnetUrl;
         }else{
           throw err;
         }
@@ -76,7 +74,7 @@ export async function get({link, id, magnetUrl, infoHash, name, size, type}){
 
     }
 
-    if(link.startsWith('magnet')){
+    if(link && link.startsWith('magnet')){
 
       parseInfos = await parseTorrent(link);
       magnetUrl = link;
@@ -154,12 +152,16 @@ async function downloadTorrentFile({link, id, torrentLocation}){
     throw Object.assign(new Error(`Redirection detected ...`), {redirection: res.headers.get('location')});
   }
 
-  if(!(res.headers.get('content-type') || '').includes('application/x-bittorrent')){
-    throw new Error(`Invalid content-type: ${res.headers.get('content-type')}`);
-  }
-
   if(res.status != 200){
     throw new Error(`Invalid status: ${res.status}`);
+  }
+
+  // Aceita application/x-bittorrent, application/octet-stream, e outros binários
+  // O Prowlarr retorna octet-stream para arquivos .torrent
+  const contentType = res.headers.get('content-type') || '';
+  const isTextResponse = contentType.includes('text/') || contentType.includes('application/json') || contentType.includes('application/xml');
+  if (isTextResponse) {
+    throw new Error(`Resposta de texto inválida (content-type: ${contentType}), esperado arquivo .torrent binário`);
   }
 
   const buffer = await res.arrayBuffer();
