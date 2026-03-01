@@ -109,6 +109,8 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
 
     languages = normalizeLanguages(languages);
 
+    console.log(`[DEBUG SERIES] type=${type} season=${season} ep=${episode} total=${torrents.length} nomes:`, torrents.slice(0,5).map(t => t.name));
+ 
     const filterSearch = t => {
       if (!qualities.includes(t.quality)) return false;
       const words = parseWords(t.name.toLowerCase());
