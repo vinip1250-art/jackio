@@ -114,11 +114,20 @@ async function searchAllClients(query) {
           let json = null;
 
           if (isSeries) {
-            // Usa sempre type=search com S01E01 na query — compatível com todos os indexadores
-            // incluindo StremThru/Torznab que rejeitam tvSearch.
-            // CapybaraBR e outros também funcionam com search genérico.
+            // Busca com S01E01 na query
             json = await doSearch('search', query.q);
-            if (json === null) json = [];
+
+            // Fallback: busca só pelo nome (sem SxxExx) para indexadores como StremThru
+            // que indexam por nome de série mas não por episódio específico
+            if (!json || json.length === 0) {
+              const nameOnly = (query.q || '').replace(/S\d+E\d+/i, '').replace(/S\d+/i, '').trim();
+              if (nameOnly) {
+                console.log(`[Prowlarr] 0 resultados com episódio, tentando só nome: "${nameOnly}"`);
+                json = await doSearch('search', nameOnly);
+              }
+            }
+
+            if (!json) json = [];
           } else if (isMovie) {
             json = await doSearch('movie', query.q);
             if (json === null) json = await doSearch('search', query.q) ?? [];
