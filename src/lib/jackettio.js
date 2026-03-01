@@ -47,10 +47,7 @@ function reorderByLanguage(torrents, preferredLangs, debug = false) {
     }
     return { t, score };
   });
-
-  return scored
-    .sort((a, b) => b.score - a.score)
-    .map(o => o.t);
+  return scored.sort((a, b) => b.score - a.score).map(o => o.t);
 }
 
 const actionInProgress = {
@@ -82,7 +79,8 @@ function searchEpisodeFile(files, season, episode) {
 }
 
 // Regex dos grupos PT-BR — aplicada apenas para torrents do indexador StremThru
-const PT_GROUPS_REGEX = /brremux|-cza|c0ral|-cory|cypher|-tars|freddiegellar|sgf|asc|alfahd|kallango|-lcd|dual-bioma|dual-c76|-ff|-fly|anitsu|potatin|vinci|gueira|tossato|7sprit7|c\.a\.a|c0ral|cbr|-nogroup|dual-brpny|-pia|-xor|g4ris|sigma|andrehsa|riper|sigla|sh4down|gjumandi|silveira|tontom|eck|arcanjo|bj-share|epik|gusta|crime|maestro|ingram|hdtv-br|bdrip-br|batata|cinefoot|savana|coala|nyne|hmax/i;
+const PT_GROUPS_REGEX = /brremux|-cza|c0ral|-cory|cypher|-tars|freddiegellar|sgf|asc|alfahd|kallango|-lcd|dual-bioma|dual-c76|-ff|-fly|anitsu|potatin|vinci|gueira|tossato|7sprit7|c\.a\.a|cbr|-nogroup|dual-brpny|-pia|-xor|g4ris|sigma|andrehsa|riper|sigla|sh4down|gjumandi|silveira|tontom|eck|arcanjo|bj-share|epik|gusta|crime|maestro|ingram|hdtv-br|bdrip-br|batata|cinefoot|savana|coala|nyne|hmax/i;
+
 // Seeds mínimos para exibir torrents não cacheados
 const MIN_SEEDS_UNCACHED = 10;
 
@@ -109,32 +107,30 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
 
     languages = normalizeLanguages(languages);
 
-    console.log(`[DEBUG SERIES] type=${type} season=${season} ep=${episode} total=${torrents.length} nomes:`, torrents.slice(0,5).map(t => t.name));
- 
     const filterSearch = t => {
       if (!qualities.includes(t.quality)) return false;
       const words = parseWords(t.name.toLowerCase());
       if (excludeKeywords.find(w => words.includes(w))) return false;
-      
+
       if (type === 'series') {
         const nameUpper = t.name.toUpperCase();
         const sMatch = nameUpper.match(/S(\d{1,2})/);
         if (sMatch) {
-            const fileSeason = parseInt(sMatch[1]);
-            if (fileSeason !== season) return false;
+          const fileSeason = parseInt(sMatch[1]);
+          if (fileSeason !== season) return false;
         }
         const eMatch = nameUpper.match(/E(\d{1,4})(?:-?E?(\d{1,4}))?/);
         if (eMatch) {
-            const fileEpStart = parseInt(eMatch[1]);
-            const fileEpEnd = eMatch[2] ? parseInt(eMatch[2]) : fileEpStart;
-            if (episode < fileEpStart || episode > fileEpEnd) return false;
+          const fileEpStart = parseInt(eMatch[1]);
+          const fileEpEnd = eMatch[2] ? parseInt(eMatch[2]) : fileEpStart;
+          if (episode < fileEpStart || episode > fileEpEnd) return false;
         }
       }
       return !t.year || t.year === year;
     };
 
     let indexers = (await jackett.getIndexers())
-      .filter(i => i.searching[type].available && (userIndexers.includes('all') || userIndexers.includes(i.id)));
+      .filter(i => i.searching[type]?.available && (userIndexers.includes('all') || userIndexers.includes(i.id)));
 
     let torrents = [];
 
@@ -158,6 +154,8 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       )).flat();
     }
 
+    console.log(`[DEBUG] type=${type} season=${season} ep=${episode} raw=${torrents.length} year=${year}`);
+
     torrents = torrents
       .filter(filterSearch)
       .filter(t => {
@@ -169,6 +167,8 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         return true;
       })
       .sort(sortBy('seeders', true));
+
+    console.log(`[DEBUG] após filtros: ${torrents.length}`);
 
     torrents = reorderByLanguage(torrents, languages, debug)
       .slice(0, maxTorrents + 3);
@@ -194,27 +194,17 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         const notCached = !cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
         if (!notCached) return false;
 
-        // Bloqueia torrents privados — TorBox não consegue baixar sem credenciais do tracker
+        // Bloqueia torrents privados — debrid não consegue baixar sem credenciais do tracker
         const isPrivate = t.type === 'private' || t.infos?.private === true;
         if (isPrivate) return false;
 
-        // Exige seeds mínimos para não travar o TorBox tentando torrents mortos
+        // Exige seeds mínimos para não travar o debrid tentando torrents mortos
         return (t.seeders || 0) >= MIN_SEEDS_UNCACHED;
       });
-      
+
       if (debridInstance.constructor.id === 'hybrid') {
-        const rdUncached = uncached.map(t => ({
-          ...t, 
-          id: `rd:${t.id}`, 
-          shortName: 'RD',
-          name: `[RD] ${t.name}`
-        }));
-        const tbUncached = uncached.map(t => ({
-          ...t, 
-          id: `tb:${t.id}`, 
-          shortName: 'TB',
-          name: `[TB] ${t.name}`
-        }));
+        const rdUncached = uncached.map(t => ({ ...t, id: `rd:${t.id}`, shortName: 'RD' }));
+        const tbUncached = uncached.map(t => ({ ...t, id: `tb:${t.id}`, shortName: 'TB' }));
         uncached = [...rdUncached, ...tbUncached];
       }
 
@@ -243,29 +233,29 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
   const { season, episode } = parseStremioId(stremioId);
   const debridInstance = debrid.instance(userConfig);
 
+  // type é injetado em metaInfos porque meta.getEpisodeById não o retorna no objeto
   const metaInfos = { ...(await getMetaInfos(type, stremioId, userConfig.metaLanguage)), type };
   const torrents = await getTorrents(userConfig, metaInfos, debridInstance);
 
   return torrents.map(t => {
-    const file = getFile(t.infos.files || [], type, season, episode) || {};
+    const file = getFile(t.infos?.files || [], type, season, episode) || {};
     const size = bytesToSize(file.size || t.size);
     const seeds = t.seeders || 0;
 
     const isZip = /\.(zip|rar|7z)$/i.test(file.name || t.name);
     const sizeStr = isZip ? `📦 ${size}` : `📂 ${size}`;
-
     const langFlag = detectPtBr(t) ? '🇧🇷' : detectMulti(t) ? '🌐' : '';
-
-    const col1 = `${sizeStr} | 👤 ${seeds}`;
-    const col2 = `⚙️ ${t.indexerName || t.indexerId} ${langFlag}`;
-    const col3 = file.name || t.name;
 
     const service = t.shortName || debridInstance.shortName;
     const cacheSign = t.isCached ? '⚡' : '';
 
     return {
       name: `[${service}${cacheSign}] Jackio`,
-      title: [col1, col2, col3].join('\n'),
+      title: [
+        `${sizeStr} | 👤 ${seeds}`,
+        `⚙️ ${t.indexerName || t.indexerId} ${langFlag}`,
+        file.name || t.name
+      ].join('\n'),
       url: t.disabled
         ? '#'
         : `${publicUrl}/${btoa(JSON.stringify(userConfig))}/download/${type}/${stremioId}/${t.id}/${file.name || t.name}`
@@ -288,46 +278,39 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   let download = await cache.get(cacheKey);
   if (download) return download;
 
-  let files;
-  const isHybrid = debridInstance.constructor.id === 'hybrid';
-  
   const getFilesForService = async (serviceInstance) => {
     if (infos.link && !infos.link.startsWith('magnet:')) {
-        try {
-            console.log(`Baixando .torrent de: ${infos.link}`);
-            const response = await fetch(infos.link);
-            if (response.ok) {
-                const buffer = await response.arrayBuffer();
-                return await serviceInstance.getFilesFromBuffer(Buffer.from(buffer), infos.infoHash);
-            }
-        } catch(e) {
-            console.error('Falha ao baixar .torrent, fallback para magnet:', e.message);
+      try {
+        console.log(`Baixando .torrent de: ${infos.link}`);
+        const response = await fetch(infos.link);
+        if (response.ok) {
+          const buffer = await response.arrayBuffer();
+          return await serviceInstance.getFilesFromBuffer(Buffer.from(buffer), infos.infoHash);
         }
+      } catch (e) {
+        console.error('Falha ao baixar .torrent, fallback para magnet:', e.message);
+      }
     }
-    
     if (infos.magnetUrl) {
-        return await serviceInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
-    } else {
-        return await serviceInstance.getFilesFromHash(infos.infoHash);
+      return await serviceInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
     }
+    return await serviceInstance.getFilesFromHash(infos.infoHash);
   };
 
+  let files;
+  const isHybrid = debridInstance.constructor.id === 'hybrid';
+
   if (isHybrid && torrentId.startsWith('tb:')) {
-      files = await getFilesForService(debridInstance.tb);
-      files = files.map(f => ({...f, id: `tb:${f.id}`}));
-  } 
-  else if (isHybrid && torrentId.startsWith('rd:')) {
-      files = await getFilesForService(debridInstance.rd);
-      files = files.map(f => ({...f, id: `rd:${f.id}`}));
-  } 
-  else {
-      files = await getFilesForService(debridInstance);
+    files = await getFilesForService(debridInstance.tb);
+    files = files.map(f => ({ ...f, id: `tb:${f.id}` }));
+  } else if (isHybrid && torrentId.startsWith('rd:')) {
+    files = await getFilesForService(debridInstance.rd);
+    files = files.map(f => ({ ...f, id: `rd:${f.id}` }));
+  } else {
+    files = await getFilesForService(debridInstance);
   }
 
-  download = await debridInstance.getDownload(
-    getFile(files, type, season, episode)
-  );
-
+  download = await debridInstance.getDownload(getFile(files, type, season, episode));
   if (!download) throw new Error('No download');
 
   download = applyMediaflowProxyIfNeeded(download, userConfig);
