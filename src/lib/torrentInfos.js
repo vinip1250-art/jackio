@@ -38,15 +38,15 @@ export async function get({link, id, magnetUrl, infoHash, name, size, type}){
   if(magnetUrl && infoHash && name && size > 0 && type){
 
     parseInfos = {
-      infoHash, 
-      name, 
-      length: size, 
-      private: (type == 'private')
+      infoHash,
+      name,
+      length: size,
+      private: (type === 'private')
     };
 
-  }else{
+  } else {
 
-  if(link && link.startsWith('http')){
+    if(link && link.startsWith('http')){
 
       try {
 
@@ -58,15 +58,15 @@ export async function get({link, id, magnetUrl, infoHash, name, size, type}){
           magnetUrl = toMagnetURI(parseInfos);
         }
 
-      }catch(err){
+      } catch(err) {
 
         torrentLocation = '';
         if(err.redirection && err.redirection.startsWith('magnet')){
           link = err.redirection;
-        }else if(magnetUrl && magnetUrl.startsWith('magnet:')){
+        } else if(magnetUrl && magnetUrl.startsWith('magnet:')){
           // Prowlarr: download falhou mas temos magnetUrl — usa diretamente
           link = magnetUrl;
-        }else{
+        } else {
           throw err;
         }
 
@@ -75,10 +75,8 @@ export async function get({link, id, magnetUrl, infoHash, name, size, type}){
     }
 
     if(link && link.startsWith('magnet')){
-
       parseInfos = await parseTorrent(link);
       magnetUrl = link;
-
     }
 
   }
@@ -96,19 +94,17 @@ export async function get({link, id, magnetUrl, infoHash, name, size, type}){
     name: parseInfos.name || '',
     private: parseInfos.private || false,
     size: parseInfos.length || -1,
-    files: (parseInfos.files || []).map(file => {
-      return {
-        name: file.name,
-        size: file.length
-      }
-    })
+    files: (parseInfos.files || []).map(file => ({
+      name: file.name,
+      size: file.length
+    }))
   };
 
   await setById(id, torrentInfos);
 
   return torrentInfos;
 
-};
+}
 
 export async function getById(id){
 
@@ -124,24 +120,18 @@ export async function getById(id){
 }
 
 async function setById(id, infos){
-
   const cacheKey = `torrentInfos:${id}`;
   await cache.set(cacheKey, infos, {ttl: 86400*CACHE_FILE_DAYS});
-
   return infos;
-
 }
 
 export async function getTorrentFile(infos){
-
   if(infos.torrentLocation){
     try {
       return await readFile(infos.torrentLocation);
     }catch(err){}
   }
-
   return downloadTorrentFile(infos);
-
 }
 
 async function downloadTorrentFile({link, id, torrentLocation}){
@@ -152,16 +142,16 @@ async function downloadTorrentFile({link, id, torrentLocation}){
     throw Object.assign(new Error(`Redirection detected ...`), {redirection: res.headers.get('location')});
   }
 
-  if(res.status != 200){
+  if(res.status !== 200){
     throw new Error(`Invalid status: ${res.status}`);
   }
 
-  // Aceita application/x-bittorrent, application/octet-stream, e outros binários
-  // O Prowlarr retorna octet-stream para arquivos .torrent
+  // Aceita application/x-bittorrent E application/octet-stream (Prowlarr usa octet-stream)
+  // Rejeita apenas respostas de texto (json, xml, html) que indicam erro
   const contentType = res.headers.get('content-type') || '';
   const isTextResponse = contentType.includes('text/') || contentType.includes('application/json') || contentType.includes('application/xml');
   if (isTextResponse) {
-    throw new Error(`Resposta de texto inválida (content-type: ${contentType}), esperado arquivo .torrent binário`);
+    throw new Error(`Content-type inválido (${contentType}), esperado binário .torrent`);
   }
 
   const buffer = await res.arrayBuffer();
