@@ -90,31 +90,12 @@ async function searchAllClients(query) {
           const isSeries = query.cat === CATEGORY.SERIES;
           const isMovie = query.cat === CATEGORY.MOVIE;
 
-          // Tenta busca específica (tvSearch/movie) primeiro, com fallback para search genérico
-          // Necessário porque indexadores como StremThru/Zilean não suportam tvSearch
-          const attemptSearch = async (useGeneric) => {
+          const doSearch = async (searchType, searchQuery, extraParams = {}) => {
             const p = new URLSearchParams();
             p.append('apikey', client.apiKey);
-
-            if (useGeneric || (!isSeries && !isMovie)) {
-              p.append('type', 'search');
-              // Na busca genérica mantém S01E01 na query para que o indexador filtre
-              if (query.q) p.append('query', query.q);
-            } else if (isMovie) {
-              p.append('type', 'movie');
-              if (query.q) p.append('query', query.q);
-            } else {
-              // tvSearch: envia season/episode como parâmetros e query sem SxxExx
-              p.append('type', 'tvSearch');
-              const q = query.q || '';
-              const sMatch = q.match(/S(\d+)/i);
-              const eMatch = q.match(/E(\d+)/i);
-              if (sMatch) p.append('seasonNumber', parseInt(sMatch[1]));
-              if (eMatch) p.append('episodeNumber', parseInt(eMatch[1]));
-              let cleanQuery = q.replace(/S\d+E\d+/i, '').replace(/S\d+/i, '').trim();
-              if (cleanQuery) p.append('query', cleanQuery);
-            }
-
+            p.append('type', searchType);
+            if (searchQuery) p.append('query', searchQuery);
+            for (const [k, v] of Object.entries(extraParams)) p.append(k, v);
             if (specificIndexerId !== 'all') p.append('indexerIds', specificIndexerId);
 
             const url = `${client.url}/api/v1/search?${p.toString()}`;
@@ -122,10 +103,9 @@ async function searchAllClients(query) {
             const res = await fetch(url);
             const json = await res.json();
 
-            // Prowlarr retorna objeto com "message" quando há erro
             if (!Array.isArray(json)) {
-              console.warn(`[Prowlarr] Resposta não é array (indexer=${specificIndexerId}):`, json?.message || JSON.stringify(json).slice(0, 200));
-              return null; // sinaliza falha
+              console.warn(`[Prowlarr] Erro (indexer=${specificIndexerId}, type=${searchType}):`, json?.message?.slice(0, 100));
+              return null;
             }
             console.log(`[Prowlarr] resultados: ${json.length}`);
             return json;
@@ -134,15 +114,34 @@ async function searchAllClients(query) {
           let json = null;
 
           if (isSeries) {
-            // Tenta tvSearch primeiro; se falhar (erro ou 0 resultados com erro), usa search genérico
-            json = await attemptSearch(false);
-            if (json === null) {
-              console.log(`[Prowlarr] tvSearch falhou, tentando search genérico...`);
-              json = await attemptSearch(true);
+            const q = query.q || '';
+            // Tenta tvSearch com season/episode como parâmetros
+            const cleanQ = q.replace(/S\d+E\d+/i, '').replace(/S\d+/i, '').trim();
+            const sMatch = q.match(/S(\d+)/i);
+            const eMatch = q.match(/E(\d+)/i);
+            const tvParams = {};
+            if (sMatch) tvParams.seasonNumber = parseInt(sMatch[1]);
+            if (eMatch) tvParams.episodeNumber = parseInt(eMatch[1]);
+
+            json = await doSearch('tvSearch', cleanQ, tvParams);
+
+            // Fallback 1: search genérico com S01E01 na query (para indexadores Torznab como StremThru)
+            if (json === null || json.length === 0) {
+              console.log(`[Prowlarr] tvSearch sem resultado, tentando search genérico com ${q}...`);
+              json = await doSearch('search', q);
             }
+
+            // Fallback 2: search só com o nome (sem S01E01), para indexadores que não entendem o padrão
+            if (json === null || json.length === 0) {
+              console.log(`[Prowlarr] search genérico sem resultado, tentando só o nome...`);
+              json = await doSearch('search', cleanQ || q);
+            }
+
+          } else if (isMovie) {
+            json = await doSearch('movie', query.q);
+            if (json === null) json = await doSearch('search', query.q);
           } else {
-            json = await attemptSearch(false);
-            if (json === null) json = [];
+            json = await doSearch('search', query.q);
           }
 
           return normalizeProwlarrItems(json || [], query.cat);
