@@ -82,7 +82,7 @@ function searchEpisodeFile(files, season, episode) {
 const PT_GROUPS_REGEX = /brremux|-cza|c0ral|-cory|cypher|-tars|freddiegellar|sgf|asc|alfahd|kallango|-lcd|dual-bioma|dual-c76|-ff|-fly|anitsu|potatin|vinci|gueira|tossato|7sprit7|c\.a\.a|cbr|-nogroup|dual-brpny|-pia|-xor|g4ris|sigma|andrehsa|riper|sigla|sh4down|gjumandi|silveira|tontom|eck|arcanjo|bj-share|epik|gusta|crime|maestro|ingram|hdtv-br|bdrip-br|batata|cinefoot|savana|coala|nyne|hmax/i;
 
 // Seeds mínimos para exibir torrents não cacheados
-const MIN_SEEDS_UNCACHED = 10;
+const MIN_SEEDS_UNCACHED = 5;
 
 async function getTorrents(userConfig, metaInfos, debridInstance) {
   const { stremioId, type, season, episode, year } = metaInfos;
@@ -185,13 +185,6 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       }))
     )).filter(Boolean);
 
-    console.log(`[DEBUG infos] ${torrents.length} torrents com infos:`, torrents.map(t => ({
-      name: t.name.slice(0, 60),
-      infoHash: t.infos?.infoHash || 'VAZIO',
-      private: t.infos?.private,
-      seeders: t.seeders
-    })));
-
     if (debridInstance) {
       const cached = (await debridInstance.getTorrentsCached(
         torrents.filter(t => t.infos?.infoHash)
@@ -201,7 +194,8 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         const notCached = !cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
         if (!notCached) return false;
 
-        // Bloqueia torrents privados — debrid não consegue baixar sem credenciais do tracker
+        // Bloqueia torrents privados de uncached — sem credenciais do tracker, o debrid não baixa
+        // (torrents privados já na conta do usuário aparecem como cached acima)
         const isPrivate = t.type === 'private' || t.infos?.private === true;
         if (isPrivate) return false;
 
@@ -215,8 +209,6 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         uncached = [...rdUncached, ...tbUncached];
       }
 
-      console.log(`[DEBUG cache] cached=${cached.length} uncached=${uncached.length}`);
-      
       torrents = [
         ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages, debug),
         ...reorderByLanguage(uncached.sort(sortBy(...sortUncached)), languages, debug)
