@@ -8,9 +8,6 @@ import * as jackett from './jackett.js';
 import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
 
-// ... (códigos auxiliares de idioma e config sem alterações) ...
-// Copie o início do arquivo anterior até chegar em getTorrents
-
 const PTBR_KEYWORDS = [
   'pt-br', 'ptbr', 'portuguese', 'português',
   'brazilian', 'brasileiro', 'brasil',
@@ -117,19 +114,19 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       if (!qualities.includes(t.quality)) return false;
       const words = parseWords(t.name.toLowerCase());
       if (excludeKeywords.find(w => words.includes(w))) return false;
-      
+
       if (type === 'series') {
         const nameUpper = t.name.toUpperCase();
         const sMatch = nameUpper.match(/S(\d{1,2})/);
         if (sMatch) {
-            const fileSeason = parseInt(sMatch[1]);
-            if (fileSeason !== season) return false;
+          const fileSeason = parseInt(sMatch[1]);
+          if (fileSeason !== season) return false;
         }
         const eMatch = nameUpper.match(/E(\d{1,4})(?:-?E?(\d{1,4}))?/);
         if (eMatch) {
-            const fileEpStart = parseInt(eMatch[1]);
-            const fileEpEnd = eMatch[2] ? parseInt(eMatch[2]) : fileEpStart;
-            if (episode < fileEpStart || episode > fileEpEnd) return false;
+          const fileEpStart = parseInt(eMatch[1]);
+          const fileEpEnd = eMatch[2] ? parseInt(eMatch[2]) : fileEpStart;
+          if (episode < fileEpStart || episode > fileEpEnd) return false;
         }
       }
       return !t.year || t.year === year;
@@ -160,6 +157,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       )).flat();
     }
 
+    torrents = torrents
       .filter(filterSearch)
       .filter(t => {
         const indexer = (t.indexerName || t.indexerId || t.indexer || '').toLowerCase().trim();
@@ -172,8 +170,6 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .sort(sortBy('seeders', true));
 
     console.log(`[DEBUG] após filtros: ${torrents.length}`);
-
-    torrents = torrents.filter(filterSearch).sort(sortBy('seeders', true));
 
     torrents = reorderByLanguage(torrents, languages, debug)
       .slice(0, maxTorrents + 3);
@@ -190,33 +186,32 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       }))
     )).filter(Boolean);
 
-        // Exige seeds mínimos para não travar o debrid tentando torrents mortos
-        return (t.seeders || 0) >= MIN_SEEDS_UNCACHED;
-      });
-
     if (debridInstance) {
       const cached = (await debridInstance.getTorrentsCached(
         torrents.filter(t => t.infos?.infoHash)
       )).map(t => ({ ...t, isCached: true }));
 
+      // Exige seeds mínimos para não travar o debrid tentando torrents mortos
       // CORREÇÃO CRÍTICA NA LÓGICA DE UNCACHED
       let uncached = torrents.filter(t => {
-          // Verifica se este torrent (t) já está presente na lista 'cached'.
-          // No modo Hybrid, 'c.id' tem prefixo (ex: rd:123), mas 't.id' é puro (123).
-          // Temos que verificar se o ID original está contido.
-          return !cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
+        // Verifica se este torrent (t) já está presente na lista 'cached'.
+        // No modo Hybrid, 'c.id' tem prefixo (ex: rd:123), mas 't.id' é puro (123).
+        // Temos que verificar se o ID original está contido.
+        const isCached = cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
+        if (isCached) return false;
+        return (t.seeders || 0) >= MIN_SEEDS_UNCACHED;
       });
-      
+
       if (debridInstance.constructor.id === 'hybrid') {
         const rdUncached = uncached.map(t => ({
-          ...t, 
-          id: `rd:${t.id}`, 
+          ...t,
+          id: `rd:${t.id}`,
           shortName: 'RD',
           name: `[RD] ${t.name}`
         }));
         const tbUncached = uncached.map(t => ({
-          ...t, 
-          id: `tb:${t.id}`, 
+          ...t,
+          id: `tb:${t.id}`,
           shortName: 'TB',
           name: `[TB] ${t.name}`
         }));
@@ -296,38 +291,38 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   // === LÓGICA DE ROTEAMENTO E UPLOAD DE .TORRENT ===
   let files;
   const isHybrid = debridInstance.constructor.id === 'hybrid';
-  
+
   const getFilesForService = async (serviceInstance) => {
     if (infos.link && !infos.link.startsWith('magnet:')) {
-        try {
-            console.log(`Baixando .torrent de: ${infos.link}`);
-            const response = await fetch(infos.link);
-            if (response.ok) {
-                const buffer = await response.arrayBuffer();
-                return await serviceInstance.getFilesFromBuffer(Buffer.from(buffer), infos.infoHash);
-            }
-        } catch(e) {
-            console.error('Falha ao baixar .torrent, fallback para magnet:', e.message);
+      try {
+        console.log(`Baixando .torrent de: ${infos.link}`);
+        const response = await fetch(infos.link);
+        if (response.ok) {
+          const buffer = await response.arrayBuffer();
+          return await serviceInstance.getFilesFromBuffer(Buffer.from(buffer), infos.infoHash);
         }
+      } catch(e) {
+        console.error('Falha ao baixar .torrent, fallback para magnet:', e.message);
+      }
     }
-    
+
     if (infos.magnetUrl) {
-        return await serviceInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
+      return await serviceInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
     } else {
-        return await serviceInstance.getFilesFromHash(infos.infoHash);
+      return await serviceInstance.getFilesFromHash(infos.infoHash);
     }
   };
 
   if (isHybrid && torrentId.startsWith('tb:')) {
-      files = await getFilesForService(debridInstance.tb);
-      files = files.map(f => ({...f, id: `tb:${f.id}`}));
-  } 
+    files = await getFilesForService(debridInstance.tb);
+    files = files.map(f => ({...f, id: `tb:${f.id}`}));
+  }
   else if (isHybrid && torrentId.startsWith('rd:')) {
-      files = await getFilesForService(debridInstance.rd);
-      files = files.map(f => ({...f, id: `rd:${f.id}`}));
-  } 
+    files = await getFilesForService(debridInstance.rd);
+    files = files.map(f => ({...f, id: `rd:${f.id}`}));
+  }
   else {
-      files = await getFilesForService(debridInstance);
+    files = await getFilesForService(debridInstance);
   }
 
   download = await debridInstance.getDownload(
