@@ -8,6 +8,9 @@ import * as jackett from './jackett.js';
 import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
 
+// ... (códigos auxiliares de idioma e config sem alterações) ...
+// Copie o início do arquivo anterior até chegar em getTorrents
+
 const PTBR_KEYWORDS = [
   'pt-br', 'ptbr', 'portuguese', 'português',
   'brazilian', 'brasileiro', 'brasil',
@@ -47,7 +50,10 @@ function reorderByLanguage(torrents, preferredLangs, debug = false) {
     }
     return { t, score };
   });
-  return scored.sort((a, b) => b.score - a.score).map(o => o.t);
+
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .map(o => o.t);
 }
 
 const actionInProgress = {
@@ -99,7 +105,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       maxTorrents,
       sortCached,
       sortUncached,
-      indexerTimeoutSec = 25,
+      indexerTimeoutSec = 4,
       languages = [],
       indexers: userIndexers,
       debug
@@ -111,26 +117,26 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       if (!qualities.includes(t.quality)) return false;
       const words = parseWords(t.name.toLowerCase());
       if (excludeKeywords.find(w => words.includes(w))) return false;
-
+      
       if (type === 'series') {
         const nameUpper = t.name.toUpperCase();
         const sMatch = nameUpper.match(/S(\d{1,2})/);
         if (sMatch) {
-          const fileSeason = parseInt(sMatch[1]);
-          if (fileSeason !== season) return false;
+            const fileSeason = parseInt(sMatch[1]);
+            if (fileSeason !== season) return false;
         }
         const eMatch = nameUpper.match(/E(\d{1,4})(?:-?E?(\d{1,4}))?/);
         if (eMatch) {
-          const fileEpStart = parseInt(eMatch[1]);
-          const fileEpEnd = eMatch[2] ? parseInt(eMatch[2]) : fileEpStart;
-          if (episode < fileEpStart || episode > fileEpEnd) return false;
+            const fileEpStart = parseInt(eMatch[1]);
+            const fileEpEnd = eMatch[2] ? parseInt(eMatch[2]) : fileEpStart;
+            if (episode < fileEpStart || episode > fileEpEnd) return false;
         }
       }
       return !t.year || t.year === year;
     };
 
     let indexers = (await jackett.getIndexers())
-      .filter(i => i.searching[type]?.available && (userIndexers.includes('all') || userIndexers.includes(i.id)));
+      .filter(i => i.searching[type].available && (userIndexers.includes('all') || userIndexers.includes(i.id)));
 
     let torrents = [];
 
@@ -154,9 +160,6 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       )).flat();
     }
 
-    console.log(`[DEBUG] type=${type} season=${season} ep=${episode} raw=${torrents.length} year=${year}`);
-
-    torrents = torrents
       .filter(filterSearch)
       .filter(t => {
         const indexer = (t.indexerName || t.indexerId || t.indexer || '').toLowerCase().trim();
@@ -169,6 +172,8 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .sort(sortBy('seeders', true));
 
     console.log(`[DEBUG] após filtros: ${torrents.length}`);
+
+    torrents = torrents.filter(filterSearch).sort(sortBy('seeders', true));
 
     torrents = reorderByLanguage(torrents, languages, debug)
       .slice(0, maxTorrents + 3);
@@ -185,27 +190,36 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       }))
     )).filter(Boolean);
 
+        // Exige seeds mínimos para não travar o debrid tentando torrents mortos
+        return (t.seeders || 0) >= MIN_SEEDS_UNCACHED;
+      });
+
     if (debridInstance) {
       const cached = (await debridInstance.getTorrentsCached(
         torrents.filter(t => t.infos?.infoHash)
       )).map(t => ({ ...t, isCached: true }));
 
+      // CORREÇÃO CRÍTICA NA LÓGICA DE UNCACHED
       let uncached = torrents.filter(t => {
-        const notCached = !cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
-        if (!notCached) return false;
-
-        // Bloqueia torrents privados de uncached — sem credenciais do tracker, o debrid não baixa
-        // (torrents privados já na conta do usuário aparecem como cached acima)
-        const isPrivate = t.type === 'private' || t.infos?.private === true;
-        if (isPrivate) return false;
-
-        // Exige seeds mínimos para não travar o debrid tentando torrents mortos
-        return (t.seeders || 0) >= MIN_SEEDS_UNCACHED;
+          // Verifica se este torrent (t) já está presente na lista 'cached'.
+          // No modo Hybrid, 'c.id' tem prefixo (ex: rd:123), mas 't.id' é puro (123).
+          // Temos que verificar se o ID original está contido.
+          return !cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
       });
-
+      
       if (debridInstance.constructor.id === 'hybrid') {
-        const rdUncached = uncached.map(t => ({ ...t, id: `rd:${t.id}`, shortName: 'RD' }));
-        const tbUncached = uncached.map(t => ({ ...t, id: `tb:${t.id}`, shortName: 'TB' }));
+        const rdUncached = uncached.map(t => ({
+          ...t, 
+          id: `rd:${t.id}`, 
+          shortName: 'RD',
+          name: `[RD] ${t.name}`
+        }));
+        const tbUncached = uncached.map(t => ({
+          ...t, 
+          id: `tb:${t.id}`, 
+          shortName: 'TB',
+          name: `[TB] ${t.name}`
+        }));
         uncached = [...rdUncached, ...tbUncached];
       }
 
@@ -234,29 +248,29 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
   const { season, episode } = parseStremioId(stremioId);
   const debridInstance = debrid.instance(userConfig);
 
-  // type é injetado em metaInfos porque meta.getEpisodeById não o retorna no objeto
-  const metaInfos = { ...(await getMetaInfos(type, stremioId, userConfig.metaLanguage)), type };
+  const metaInfos = await getMetaInfos(type, stremioId, userConfig.metaLanguage);
   const torrents = await getTorrents(userConfig, metaInfos, debridInstance);
 
   return torrents.map(t => {
-    const file = getFile(t.infos?.files || [], type, season, episode) || {};
+    const file = getFile(t.infos.files || [], type, season, episode) || {};
     const size = bytesToSize(file.size || t.size);
     const seeds = t.seeders || 0;
 
     const isZip = /\.(zip|rar|7z)$/i.test(file.name || t.name);
     const sizeStr = isZip ? `📦 ${size}` : `📂 ${size}`;
+
     const langFlag = detectPtBr(t) ? '🇧🇷' : detectMulti(t) ? '🌐' : '';
+
+    const col1 = `${sizeStr} | 👤 ${seeds}`;
+    const col2 = `⚙️ ${t.indexerName || t.indexerId} ${langFlag}`;
+    const col3 = file.name || t.name;
 
     const service = t.shortName || debridInstance.shortName;
     const cacheSign = t.isCached ? '⚡' : '';
 
     return {
       name: `[${service}${cacheSign}] Jackio`,
-      title: [
-        `${sizeStr} | 👤 ${seeds}`,
-        `⚙️ ${t.indexerName || t.indexerId} ${langFlag}`,
-        file.name || t.name
-      ].join('\n'),
+      title: [col1, col2, col3].join('\n'),
       url: t.disabled
         ? '#'
         : `${publicUrl}/${btoa(JSON.stringify(userConfig))}/download/${type}/${stremioId}/${t.id}/${file.name || t.name}`
@@ -279,39 +293,47 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   let download = await cache.get(cacheKey);
   if (download) return download;
 
-  const getFilesForService = async (serviceInstance) => {
-    if (infos.link && !infos.link.startsWith('magnet:')) {
-      try {
-        console.log(`Baixando .torrent de: ${infos.link}`);
-        const response = await fetch(infos.link);
-        if (response.ok) {
-          const buffer = await response.arrayBuffer();
-          return await serviceInstance.getFilesFromBuffer(Buffer.from(buffer), infos.infoHash);
-        }
-      } catch (e) {
-        console.error('Falha ao baixar .torrent, fallback para magnet:', e.message);
-      }
-    }
-    if (infos.magnetUrl) {
-      return await serviceInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
-    }
-    return await serviceInstance.getFilesFromHash(infos.infoHash);
-  };
-
+  // === LÓGICA DE ROTEAMENTO E UPLOAD DE .TORRENT ===
   let files;
   const isHybrid = debridInstance.constructor.id === 'hybrid';
+  
+  const getFilesForService = async (serviceInstance) => {
+    if (infos.link && !infos.link.startsWith('magnet:')) {
+        try {
+            console.log(`Baixando .torrent de: ${infos.link}`);
+            const response = await fetch(infos.link);
+            if (response.ok) {
+                const buffer = await response.arrayBuffer();
+                return await serviceInstance.getFilesFromBuffer(Buffer.from(buffer), infos.infoHash);
+            }
+        } catch(e) {
+            console.error('Falha ao baixar .torrent, fallback para magnet:', e.message);
+        }
+    }
+    
+    if (infos.magnetUrl) {
+        return await serviceInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
+    } else {
+        return await serviceInstance.getFilesFromHash(infos.infoHash);
+    }
+  };
 
   if (isHybrid && torrentId.startsWith('tb:')) {
-    files = await getFilesForService(debridInstance.tb);
-    files = files.map(f => ({ ...f, id: `tb:${f.id}` }));
-  } else if (isHybrid && torrentId.startsWith('rd:')) {
-    files = await getFilesForService(debridInstance.rd);
-    files = files.map(f => ({ ...f, id: `rd:${f.id}` }));
-  } else {
-    files = await getFilesForService(debridInstance);
+      files = await getFilesForService(debridInstance.tb);
+      files = files.map(f => ({...f, id: `tb:${f.id}`}));
+  } 
+  else if (isHybrid && torrentId.startsWith('rd:')) {
+      files = await getFilesForService(debridInstance.rd);
+      files = files.map(f => ({...f, id: `rd:${f.id}`}));
+  } 
+  else {
+      files = await getFilesForService(debridInstance);
   }
 
-  download = await debridInstance.getDownload(getFile(files, type, season, episode));
+  download = await debridInstance.getDownload(
+    getFile(files, type, season, episode)
+  );
+
   if (!download) throw new Error('No download');
 
   download = applyMediaflowProxyIfNeeded(download, userConfig);
