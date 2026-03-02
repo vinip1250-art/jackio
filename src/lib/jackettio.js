@@ -85,7 +85,7 @@ function searchEpisodeFile(files, season, episode) {
 const PT_GROUPS_REGEX = /brremux|-cza|c0ral|-cory|cypher|-tars|freddiegellar|sgf|asc|alfahd|kallango|-lcd|dual-bioma|dual-c76|-ff|-fly|anitsu|potatin|vinci|gueira|tossato|7sprit7|c\.a\.a|cbr|-nogroup|dual-brpny|-pia|-xor|g4ris|sigma|andrehsa|riper|sigla|sh4down|gjumandi|silveira|tontom|eck|arcanjo|bj-share|epik|gusta|crime|maestro|ingram|hdtv-br|bdrip-br|batata|cinefoot|savana|coala|nyne|hmax/i;
 
 // Seeds mínimos para exibir torrents não cacheados
-const MIN_SEEDS_UNCACHED = 5;
+const MIN_SEEDS_UNCACHED = 1;
 
 async function getTorrents(userConfig, metaInfos, debridInstance) {
   const { stremioId, type, season, episode, year } = metaInfos;
