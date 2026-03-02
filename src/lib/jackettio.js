@@ -87,6 +87,92 @@ const PT_GROUPS_REGEX = /brremux|-cza|c0ral|-cory|cypher|-tars|freddiegellar|sgf
 // Seeds mínimos para exibir torrents não cacheados
 const MIN_SEEDS_UNCACHED = 1;
 
+/**
+ * Extrai o infoHash real de um buffer de arquivo .torrent.
+ * O infoHash é o SHA1 do value bencoded da chave "info" do dicionário raiz.
+ */
+async function extractInfoHashFromBuffer(buffer) {
+  try {
+    const { createHash } = await import('crypto');
+
+    // Bencode parser mínimo para localizar o value da chave "info"
+    // Formato: d...4:info<bencode_value>...e
+    const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+    const str = buf.toString('binary');
+
+    // Localiza "4:info" seguido do valor bencoded
+    const infoKey = '4:info';
+    const idx = str.indexOf(infoKey);
+    if (idx === -1) return null;
+
+    const infoStart = idx + infoKey.length;
+
+    // Encontra o fim do value bencoded da chave info
+    // Precisa parsear o tamanho correto do bencode a partir de infoStart
+    const infoEnd = findBencodeEnd(buf, infoStart);
+    if (infoEnd === -1) return null;
+
+    const infoSlice = buf.slice(infoStart, infoEnd);
+    const hash = createHash('sha1').update(infoSlice).digest('hex');
+    return hash;
+  } catch (e) {
+    console.error('[jackettio] Falha ao extrair infoHash do buffer:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Encontra o índice de fim de um valor bencoded começando em `start`.
+ * Retorna o índice exclusivo (após o último byte do valor).
+ */
+function findBencodeEnd(buf, start) {
+  try {
+    const ch = String.fromCharCode(buf[start]);
+
+    if (ch === 'd') {
+      // Dicionário: d...e
+      let i = start + 1;
+      while (i < buf.length && buf[i] !== 0x65 /* 'e' */) {
+        const keyEnd = findBencodeEnd(buf, i);
+        if (keyEnd === -1) return -1;
+        const valEnd = findBencodeEnd(buf, keyEnd);
+        if (valEnd === -1) return -1;
+        i = valEnd;
+      }
+      return i + 1; // skip 'e'
+    }
+
+    if (ch === 'l') {
+      // Lista: l...e
+      let i = start + 1;
+      while (i < buf.length && buf[i] !== 0x65 /* 'e' */) {
+        const end = findBencodeEnd(buf, i);
+        if (end === -1) return -1;
+        i = end;
+      }
+      return i + 1;
+    }
+
+    if (ch === 'i') {
+      // Inteiro: i<digits>e
+      const end = buf.indexOf(0x65 /* 'e' */, start + 1);
+      return end === -1 ? -1 : end + 1;
+    }
+
+    if (ch >= '0' && ch <= '9') {
+      // String: <len>:<data>
+      const colon = buf.indexOf(0x3a /* ':' */, start);
+      if (colon === -1) return -1;
+      const len = parseInt(buf.slice(start, colon).toString('ascii'), 10);
+      return colon + 1 + len;
+    }
+
+    return -1;
+  } catch {
+    return -1;
+  }
+}
+
 async function getTorrents(userConfig, metaInfos, debridInstance) {
   const { stremioId, type, season, episode, year } = metaInfos;
 
@@ -102,7 +188,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       maxTorrents,
       sortCached,
       sortUncached,
-      indexerTimeoutSec = 25,
+      indexerTimeoutSec = 10,
       languages = [],
       indexers: userIndexers,
       debug
@@ -191,12 +277,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         torrents.filter(t => t.infos?.infoHash)
       )).map(t => ({ ...t, isCached: true }));
 
-      // Exige seeds mínimos para não travar o debrid tentando torrents mortos
-      // CORREÇÃO CRÍTICA NA LÓGICA DE UNCACHED
       let uncached = torrents.filter(t => {
-        // Verifica se este torrent (t) já está presente na lista 'cached'.
-        // No modo Hybrid, 'c.id' tem prefixo (ex: rd:123), mas 't.id' é puro (123).
-        // Temos que verificar se o ID original está contido.
         const isCached = cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
         if (isCached) return false;
         return (t.seeders || 0) >= MIN_SEEDS_UNCACHED;
@@ -292,25 +373,80 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   let files;
   const isHybrid = debridInstance.constructor.id === 'hybrid';
 
+  /**
+   * Tenta obter os arquivos do torrent para um serviço debrid.
+   *
+   * Estratégia em cascata:
+   *   1. Baixar o .torrent via HTTP e fazer upload do buffer
+   *      → extrai o infoHash real do buffer para enriquecer o magnetUrl fallback
+   *   2. Se o download/upload falhar, usar o magnetUrl original do Jackett
+   *      (que já contém o infoHash correto no xt=urn:btih)
+   *   3. Se não houver magnetUrl, construir magnet a partir do infoHash do torrentInfos
+   */
   const getFilesForService = async (serviceInstance) => {
+    // --- Tentativa 1: baixar e fazer upload do arquivo .torrent ---
     if (infos.link && !infos.link.startsWith('magnet:')) {
       try {
-        console.log(`Baixando .torrent de: ${infos.link}`);
-        const response = await fetch(infos.link);
+        console.log(`[jackettio] Baixando .torrent de: ${infos.link}`);
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15_000);
+
+        const response = await fetch(infos.link, { signal: controller.signal });
+        clearTimeout(timeout);
+
         if (response.ok) {
-          const buffer = await response.arrayBuffer();
-          return await serviceInstance.getFilesFromBuffer(Buffer.from(buffer), infos.infoHash);
+          const contentType = response.headers.get('content-type') || '';
+          const buffer = Buffer.from(await response.arrayBuffer());
+
+          // Valida que é realmente um arquivo .torrent (começa com 'd' em bencode)
+          const isTorrentFile = contentType.includes('torrent')
+            || contentType.includes('octet-stream')
+            || buffer[0] === 0x64; // 'd' em ASCII
+
+          if (isTorrentFile && buffer.length > 50) {
+            console.log(`[jackettio] .torrent baixado (${buffer.length} bytes), fazendo upload...`);
+
+            // Extrai o infoHash real do buffer para usar como fallback
+            const realHash = await extractInfoHashFromBuffer(buffer);
+            if (realHash) {
+              console.log(`[jackettio] infoHash extraído do .torrent: ${realHash}`);
+              infos.realInfoHash = realHash;
+            }
+
+            return await serviceInstance.getFilesFromBuffer(buffer, realHash || infos.infoHash);
+          } else {
+            console.warn(`[jackettio] Resposta não é .torrent (content-type: ${contentType}, bytes: ${buffer.length}), pulando upload.`);
+          }
+        } else {
+          console.warn(`[jackettio] HTTP ${response.status} ao baixar .torrent, usando fallback.`);
         }
-      } catch(e) {
-        console.error('Falha ao baixar .torrent, fallback para magnet:', e.message);
+      } catch (e) {
+        console.error(`[jackettio] Falha ao baixar/upload .torrent: ${e.message}`);
       }
     }
 
-    if (infos.magnetUrl) {
-      return await serviceInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
-    } else {
-      return await serviceInstance.getFilesFromHash(infos.infoHash);
+    // --- Tentativa 2: usar o magnetUrl original do Jackett/Prowlarr ---
+    // O magnetUrl do Jackett já tem o infoHash correto no xt=urn:btih
+    const magnetUrl = infos.magnetUrl || infos.magnet;
+    if (magnetUrl && magnetUrl.startsWith('magnet:')) {
+      console.log(`[jackettio] Usando magnetUrl original: ${magnetUrl.slice(0, 80)}...`);
+      // Extrai o hash do próprio magnet para log/debug
+      const hashFromMagnet = magnetUrl.match(/xt=urn:btih:([a-fA-F0-9]{40})/i)?.[1];
+      if (hashFromMagnet) {
+        console.log(`[jackettio] infoHash do magnetUrl: ${hashFromMagnet}`);
+      }
+      return await serviceInstance.getFilesFromMagnet(magnetUrl, hashFromMagnet || infos.infoHash);
     }
+
+    // --- Tentativa 3: construir magnet a partir do infoHash ---
+    const hashToUse = infos.realInfoHash || infos.infoHash;
+    if (hashToUse) {
+      console.log(`[jackettio] Construindo magnet a partir do infoHash: ${hashToUse}`);
+      return await serviceInstance.getFilesFromHash(hashToUse);
+    }
+
+    throw new Error(`[jackettio] Sem link, magnetUrl ou infoHash disponível para o torrent.`);
   };
 
   if (isHybrid && torrentId.startsWith('tb:')) {
