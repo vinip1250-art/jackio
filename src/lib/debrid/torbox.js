@@ -91,17 +91,14 @@ export default class Torbox {
     return this.getFilesFromMagnet(magnet, infoHash);
   }
 
-  // CORREÇÃO: Agora aceita Buffer real e faz upload do .torrent
   async getFilesFromBuffer(buffer, infoHash){
     const formData = new FormData();
     const blob = new Blob([buffer], { type: 'application/x-bittorrent' });
     formData.append('file', blob, 'torrent.torrent');
     
-    // Tenta adicionar via arquivo
     const torrentId = await this.#addToTorbox(formData, true);
     
     if (!torrentId) {
-        // Fallback: se o arquivo falhar, tenta magnet
         console.log(`[Torbox] Upload de arquivo falhou, tentando magnet para ${infoHash}...`);
         const magnet = this.#buildMagnet(infoHash);
         return this.getFilesFromMagnet(magnet, infoHash);
@@ -126,10 +123,8 @@ export default class Torbox {
     return this.#waitForTorrentReady(torrentId);
   }
 
-  // CORREÇÃO: Unificado para aceitar FormData (arquivo ou magnet)
   async #addToTorbox(formData, isFile = false) {
     try {
-        // Endpoint é o mesmo, mas o conteúdo do FormData muda
         const res = await this.#request('POST', '/torrents/createtorrent', { body: formData });
         
         if (res?.success) {
@@ -170,7 +165,6 @@ export default class Torbox {
             const found = res.data.find(t => t.id === id);
             
             if (found) {
-                // Sucesso se tiver arquivos E download_present (ou state 'completed'/'cached')
                 if ((found.download_present === true || found.download_state === 'cached') && found.files && found.files.length > 0) {
                     torrentInfo = found;
                     break;
@@ -220,16 +214,39 @@ export default class Torbox {
   }
 
   #buildMagnet(hash) {
-      const trackers = [
-          'udp://tracker.opentrackr.org:1337/announce',
-          'udp://open.stealth.si:80/announce',
-          'udp://tracker.coppersurfer.tk:6969/announce',
-          'udp://tracker.leechers-paradise.org:6969/announce',
-          'udp://9.rarbg.to:2710/announce',
-          'udp://tracker.cyberia.is:6969/announce',
-          'udp://tracker.internetwarriors.net:1337/announce'
-      ];
-      return `magnet:?xt=urn:btih:${hash}&tr=${trackers.join('&tr=')}`;
+    const trackers = [
+      // --- Tier 1: Alta confiabilidade, amplamente usados ---
+      'udp://tracker.opentrackr.org:1337/announce',
+      'udp://open.stealth.si:80/announce',
+      'udp://open.demonii.com:1337/announce',
+      'udp://open.tracker.cl:1337/announce',
+      'udp://open.dstud.io:6969/announce',
+      'udp://exodus.desync.com:6969/announce',
+      'udp://explodie.org:6969/announce',
+
+      // --- Tier 2: Boa cobertura global ---
+      'udp://tracker.torrent.eu.org:451/announce',
+      'udp://www.torrent.eu.org:451/announce',
+      'udp://tracker.dler.com:6969/announce',
+      'udp://tracker.dler.org:6969/announce',
+      'udp://tracker2.dler.org:80/announce',
+      'udp://p4p.arenabg.com:1337/announce',
+      'udp://wepzone.net:6969/announce',
+      'udp://bt.ktrackers.com:6666/announce',
+
+      // --- Tier 3: Complementares / diversidade de rede ---
+      'http://tracker.bt4g.com:2095/announce',
+      'http://open.trackerlist.xyz:80/announce',
+      'udp://tracker.filemail.com:6969/announce',
+      'udp://tracker.theoks.net:6969/announce',
+      'udp://tracker.srv00.com:6969/announce',
+      'udp://tracker.bittor.pw:1337/announce',
+      'udp://tracker-udp.gbitt.info:80/announce',
+      'udp://tracker.dump.cl:6969/announce',
+      'https://tracker.ghostchu-services.top:443/announce',
+    ];
+
+    return `magnet:?xt=urn:btih:${hash}&tr=${trackers.join('&tr=')}`;
   }
 
   async #request(method, path, opts){
@@ -238,7 +255,6 @@ export default class Torbox {
       'Authorization': `Bearer ${this.#apiKey}`,
       'Accept': 'application/json' 
     });
-    // Remove content-type se for FormData para o browser/node setar boundary
     if (opts.body instanceof FormData) {
         delete headers['Content-Type']; 
     }
