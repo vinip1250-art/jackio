@@ -247,6 +247,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .filter(filterSearch)
       .filter(t => {
         const indexer = (t.indexerName || t.indexerId || t.indexer || '').toLowerCase().trim();
+        console.log(`[INDEXER_ID] "${indexer}" | ${t.name?.slice(0, 60)}`); 
         const isStremThru = indexer.includes('stremthru');
         if (isStremThru) {
           return PT_GROUPS_REGEX.test(t.name || '');
