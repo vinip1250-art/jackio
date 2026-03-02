@@ -1,6 +1,7 @@
 import {createHash} from 'crypto';
 import {ERROR} from './const.js';
 import {wait} from '../util.js';
+import {injectTrackers} from './torrentEnrich.js'; // src/lib/debrid/torrentEnrich.js
 
 export default class Torbox { 
 
@@ -92,8 +93,12 @@ export default class Torbox {
   }
 
   async getFilesFromBuffer(buffer, infoHash){
+    // Injeta trackers adicionais no .torrent antes do upload
+    // O dict "info" é preservado intacto — infoHash não muda
+    const enrichedBuffer = injectTrackers(buffer);
+
     const formData = new FormData();
-    const blob = new Blob([buffer], { type: 'application/x-bittorrent' });
+    const blob = new Blob([enrichedBuffer], { type: 'application/x-bittorrent' });
     formData.append('file', blob, 'torrent.torrent');
     
     const torrentId = await this.#addToTorbox(formData, true);
