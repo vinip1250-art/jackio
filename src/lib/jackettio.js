@@ -12,7 +12,8 @@ const PTBR_KEYWORDS = [
   'pt-br', 'ptbr', 'portuguese', 'português',
   'brazilian', 'brasileiro', 'brasil',
   'dublado', 'nacional', 'por', 'pob',
-  'multi-audio', 'multi audio', 'dual audio'
+  'multi-audio', 'multi audio', 'dual audio' , 
+  'dual-bioma' , 'dual-c76' , 'andrehsa'
 ];
 
 function normalizeLanguages(langs) {
