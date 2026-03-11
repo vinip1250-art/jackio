@@ -9,7 +9,7 @@ import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
 
 const PTBR_KEYWORDS = [
-  'pt-br', 'ptbr', 'portuguese', 'português',
+  'pt-br', 'ptbr', 'portuguese', 'portugues',
   'brazilian', 'brasileiro', 'brasil',
   'dublado', 'nacional', 'por', 'pob',
   'multi-audio', 'multi audio', 'dual audio' , 
