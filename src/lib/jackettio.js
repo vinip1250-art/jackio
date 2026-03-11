@@ -192,6 +192,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       indexerTimeoutSec = 10,
       languages = [],
       indexers: userIndexers,
+      hideUncached,
       debug
     } = userConfig;
 
@@ -300,6 +301,8 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         }));
         uncached = [...rdUncached, ...tbUncached];
       }
+
+      if (hideUncached) uncached = [];
 
       torrents = [
         ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages, debug),
