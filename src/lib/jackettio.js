@@ -4,9 +4,12 @@ import config from './config.js';
 import cache from './cache.js';
 import { updateUserConfigWithMediaFlowIp, applyMediaflowProxyIfNeeded } from './mediaflowProxy.js';
 import * as meta from './meta.js';
+import Kitsu from './meta/kitsu.js';
 import * as jackett from './jackett.js';
 import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
+
+const kitsuClient = new Kitsu();
 
 const PTBR_KEYWORDS = [
   'pt-br', 'ptbr', 'portuguese', 'português',
@@ -78,9 +81,16 @@ function parseStremioId(stremioId) {
 async function getMetaInfos(type, stremioId, language) {
   const parsed = parseStremioId(stremioId);
   const { id, season, episode, isKitsu } = parsed;
-  const resolvedType = (type === 'anime' || isKitsu) ? 'series' : type;
-  if (resolvedType === 'movie') return { ...await meta.getMovieById(id, language), isKitsu };
-  if (resolvedType === 'series') return { ...await meta.getEpisodeById(id, season, episode, language), isKitsu, episode, season };
+
+  // Kitsu: chama diretamente, sem passar por meta.js
+  if (isKitsu) {
+    const info = await kitsuClient.getEpisodeById(id, season, episode);
+    return { ...info, isKitsu: true, episode, season };
+  }
+
+  const resolvedType = type === 'anime' ? 'series' : type;
+  if (resolvedType === 'movie') return { ...await meta.getMovieById(id, language), isKitsu: false };
+  if (resolvedType === 'series') return { ...await meta.getEpisodeById(id, season, episode, language), isKitsu: false };
   throw new Error(`Unsupported type ${type}`);
 }
 
