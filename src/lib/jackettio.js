@@ -60,14 +60,24 @@ const actionInProgress = {
 };
 
 function parseStremioId(stremioId) {
+  // Kitsu IDs: "kitsu:12345:1:1" — o id em si já tem "kitsu:" como prefixo
+  if (stremioId.startsWith('kitsu:')) {
+    const parts = stremioId.split(':');
+    // parts = ['kitsu', '12345', season?, episode?]
+    const id = `kitsu:${parts[1]}`;
+    const season = Number(parts[2] || 0);
+    const episode = Number(parts[3] || 0);
+    return { id, season, episode };
+  }
   const [id, season, episode] = stremioId.split(':');
   return { id, season: Number(season || 0), episode: Number(episode || 0) };
 }
 
 async function getMetaInfos(type, stremioId, language) {
   const { id, season, episode } = parseStremioId(stremioId);
-  if (type === 'movie') return meta.getMovieById(id, language);
-  if (type === 'series') return meta.getEpisodeById(id, season, episode, language);
+  const resolvedType = type === 'anime' ? 'series' : type;
+  if (resolvedType === 'movie') return meta.getMovieById(id, language);
+  if (resolvedType === 'series') return meta.getEpisodeById(id, season, episode, language);
   throw new Error(`Unsupported type ${type}`);
 }
 
@@ -189,7 +199,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       maxTorrents,
       sortCached,
       sortUncached,
-      indexerTimeoutSec = 7,
+      indexerTimeoutSec = 10,
       languages = [],
       indexers: userIndexers,
       hideUncached,
