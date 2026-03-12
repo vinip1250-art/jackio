@@ -1,5 +1,24 @@
 import cache from '../cache.js';
 
+// Sufixos que o Kitsu adiciona ao título mas que não aparecem nos torrents
+const KITSU_NAME_SUFFIXES = [
+  /\s*[-–]\s*[^-–]+$/,                         // " - Arise from the Shadow-" e similares
+  /\s*:?\s*Season\s+\d+(\s+Part\s+\d+)?$/i,    // "Season 2", "Season 2 Part 1"
+  /\s*Part\s+\d+$/i,                            // "Part 2"
+  /\s*Cour\s+\d+$/i,                            // "Cour 2"
+  /\s*\(\d{4}\)$/,                              // "(2024)"
+];
+
+function simplifyAnimeName(name) {
+  let simplified = name.trim();
+  for (const pattern of KITSU_NAME_SUFFIXES) {
+    simplified = simplified.replace(pattern, '').trim();
+  }
+  // Remove pontuação no final que pode sobrar
+  simplified = simplified.replace(/[:\-–,]+$/, '').trim();
+  return simplified || name;
+}
+
 export default class Kitsu {
 
   static id = 'kitsu';
@@ -24,18 +43,25 @@ export default class Kitsu {
     const attrs = data?.data?.attributes;
     if (!attrs) throw new Error(`Kitsu: anime ${kitsuId} não encontrado`);
 
-    const name =
+    const fullName =
       attrs.titles?.en ||
       attrs.titles?.en_jp ||
       attrs.canonicalTitle ||
       'Unknown Anime';
+
+    const searchName = simplifyAnimeName(fullName);
+
+    if (searchName !== fullName) {
+      console.log(`[KITSU] nome original: "${fullName}" → busca: "${searchName}"`);
+    }
 
     const year = attrs.startDate
       ? parseInt(attrs.startDate.split('-')[0])
       : 0;
 
     return {
-      name,
+      name: searchName,
+      fullName,
       year,
       imdb_id: null,
       type: 'series',
