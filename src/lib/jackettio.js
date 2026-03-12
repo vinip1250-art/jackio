@@ -9,7 +9,7 @@ import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
 
 const PTBR_KEYWORDS = [
-  'pt-br', 'ptbr', 'portuguese', 'portugues',
+  'pt-br', 'ptbr', 'portuguese', 'português',
   'brazilian', 'brasileiro', 'brasil',
   'dublado', 'nacional', 'por', 'pob',
   'multi-audio', 'multi audio', 'dual audio' , 
@@ -189,7 +189,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       maxTorrents,
       sortCached,
       sortUncached,
-      indexerTimeoutSec = 10,
+      indexerTimeoutSec = 7,
       languages = [],
       indexers: userIndexers,
       hideUncached,
@@ -263,28 +263,39 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
     torrents = reorderByLanguage(torrents, languages, debug)
       .slice(0, maxTorrents + 3);
 
+    console.log(`[DEBUG] enviando para torrentInfos: ${torrents.length}`);
+
     const limit = pLimit(5);
     torrents = (await Promise.all(
       torrents.map(t => limit(async () => {
+        const t0 = Date.now();
         try {
           t.infos = await promiseTimeout(torrentInfos.get(t), 30_000);
+          console.log(`[INFOS] ✅ ${(Date.now()-t0)}ms | hash=${t.infos?.infoHash || 'N/A'} | ${t.name?.slice(0,60)}`);
           return t;
-        } catch {
+        } catch(e) {
+          console.log(`[INFOS] ❌ ${(Date.now()-t0)}ms | erro=${e?.message || 'timeout'} | ${t.name?.slice(0,60)}`);
           return null;
         }
       }))
     )).filter(Boolean);
 
+    console.log(`[DEBUG] após torrentInfos: ${torrents.length} | sem infoHash: ${torrents.filter(t => !t.infos?.infoHash).length}`);
+
     if (debridInstance) {
-      const cached = (await debridInstance.getTorrentsCached(
-        torrents.filter(t => t.infos?.infoHash)
-      )).map(t => ({ ...t, isCached: true }));
+      const torrentsWithHash = torrents.filter(t => t.infos?.infoHash);
+      console.log(`[DEBUG] enviando para cache check: ${torrentsWithHash.length} (${torrents.length - torrentsWithHash.length} sem hash ignorados)`);
+
+      const t0Debrid = Date.now();
+      const cached = (await debridInstance.getTorrentsCached(torrentsWithHash)).map(t => ({ ...t, isCached: true }));
+      console.log(`[DEBUG] cache check em ${Date.now()-t0Debrid}ms → cached: ${cached.length}`);
 
       let uncached = torrents.filter(t => {
         const isCached = cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
         if (isCached) return false;
         return (t.seeders || 0) >= MIN_SEEDS_UNCACHED;
       });
+      console.log(`[DEBUG] uncached (seeds >= ${MIN_SEEDS_UNCACHED}): ${uncached.length}`);
 
       if (debridInstance.constructor.id === 'hybrid') {
         const rdUncached = uncached.map(t => ({
@@ -302,12 +313,17 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         uncached = [...rdUncached, ...tbUncached];
       }
 
-      if (hideUncached) uncached = [];
+      if (hideUncached) {
+        console.log(`[DEBUG] hideUncached=true → removendo ${uncached.length} não-cacheados`);
+        uncached = [];
+      }
 
       torrents = [
         ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages, debug),
         ...reorderByLanguage(uncached.sort(sortBy(...sortUncached)), languages, debug)
       ].slice(0, maxTorrents);
+
+      console.log(`[DEBUG] resultado final: ${torrents.length} streams (${cached.length} cached, ${uncached.length} uncached)`);
     }
 
     return torrents;
