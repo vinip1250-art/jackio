@@ -60,24 +60,27 @@ const actionInProgress = {
 };
 
 function parseStremioId(stremioId) {
-  // Kitsu IDs: "kitsu:12345:1:1" — o id em si já tem "kitsu:" como prefixo
+  // Kitsu IDs: "kitsu:12345:6" (animeId:episodioAbsoluto) ou "kitsu:12345" (filme/OVA)
   if (stremioId.startsWith('kitsu:')) {
     const parts = stremioId.split(':');
-    // parts = ['kitsu', '12345', season?, episode?]
     const id = `kitsu:${parts[1]}`;
-    const season = Number(parts[2] || 0);
-    const episode = Number(parts[3] || 0);
-    return { id, season, episode };
+    // Kitsu usa numeração absoluta — sem temporada separada
+    // parts[2] pode ser episódio absoluto ou temporada dependendo do cliente Stremio
+    // Tratamos parts[2] como episódio absoluto e season=1 por padrão
+    const episode = Number(parts[2] || 0);
+    const season = Number(parts[3] || 1); // alguns clientes enviam season em parts[3]
+    return { id, season, episode, isKitsu: true };
   }
   const [id, season, episode] = stremioId.split(':');
-  return { id, season: Number(season || 0), episode: Number(episode || 0) };
+  return { id, season: Number(season || 0), episode: Number(episode || 0), isKitsu: false };
 }
 
 async function getMetaInfos(type, stremioId, language) {
-  const { id, season, episode } = parseStremioId(stremioId);
-  const resolvedType = type === 'anime' ? 'series' : type;
-  if (resolvedType === 'movie') return meta.getMovieById(id, language);
-  if (resolvedType === 'series') return meta.getEpisodeById(id, season, episode, language);
+  const parsed = parseStremioId(stremioId);
+  const { id, season, episode, isKitsu } = parsed;
+  const resolvedType = (type === 'anime' || isKitsu) ? 'series' : type;
+  if (resolvedType === 'movie') return { ...await meta.getMovieById(id, language), isKitsu };
+  if (resolvedType === 'series') return { ...await meta.getEpisodeById(id, season, episode, language), isKitsu, episode, season };
   throw new Error(`Unsupported type ${type}`);
 }
 
@@ -208,12 +211,16 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
 
     languages = normalizeLanguages(languages);
 
+    const isAnime = type === 'anime' || metaInfos.isKitsu;
+    const searchType = isAnime ? 'series' : type;
+
     const filterSearch = t => {
       if (!qualities.includes(t.quality)) return false;
       const words = parseWords(t.name.toLowerCase());
       if (excludeKeywords.find(w => words.includes(w))) return false;
 
-      if (type === 'series') {
+      // Anime: não filtra por SxxExx pois torrents usam numeração absoluta
+      if (searchType === 'series' && !isAnime) {
         const nameUpper = t.name.toUpperCase();
         const sMatch = nameUpper.match(/S(\d{1,2})/);
         if (sMatch) {
@@ -231,11 +238,13 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
     };
 
     let indexers = (await jackett.getIndexers())
-      .filter(i => i.searching[type].available && (userIndexers.includes('all') || userIndexers.includes(i.id)));
+      .filter(i => i.searching[searchType]?.available && (userIndexers.includes('all') || userIndexers.includes(i.id)));
+
+    console.log(`[DEBUG] type=${type} isAnime=${isAnime} indexers=${indexers.length} name="${metaInfos.name}" ep=${episode}`);
 
     let torrents = [];
 
-    if (type === 'movie') {
+    if (searchType === 'movie') {
       torrents = (await Promise.all(
         indexers.map(i =>
           promiseTimeout(
@@ -245,14 +254,22 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         )
       )).flat();
     } else {
-      torrents = (await Promise.all(
-        indexers.map(i =>
-          promiseTimeout(
-            jackett.searchEpisodeTorrents({ ...metaInfos, indexer: i.id }),
-            indexerTimeoutSec * 1000
-          ).catch(() => [])
-        )
-      )).flat();
+      // Para anime, busca apenas pelo nome (sem S/E), e também tenta busca por episódio
+      const searches = isAnime
+        ? [
+            jackett.searchSerieTorrents({ ...metaInfos, indexer: 'all' }),
+            episode > 0
+              ? jackett.searchMovieTorrents({ ...metaInfos, name: `${metaInfos.name} ${episode}`, indexer: 'all' })
+              : Promise.resolve([])
+          ]
+        : indexers.map(i =>
+            promiseTimeout(
+              jackett.searchEpisodeTorrents({ ...metaInfos, indexer: i.id }),
+              indexerTimeoutSec * 1000
+            ).catch(() => [])
+          );
+
+      torrents = (await Promise.all(searches)).flat();
     }
 
     torrents = torrents
