@@ -65,6 +65,7 @@ async function searchAllClients(query) {
             : `/api/v2.0/indexers/${specificIndexerId}/results/torznab/api`;
         const url = `${client.url}${apiPath}?${params.toString()}`;
         
+        const t0 = Date.now();
         let data;
         const res = await fetch(url);
         if(res.headers.get('content-type')?.includes('application/json')){
@@ -76,7 +77,21 @@ async function searchAllClients(query) {
         }
 
         if (query.t === 'indexers') return normalizeIndexers(data?.indexers?.indexer || [], client.id);
-        return normalizeItems(data?.rss?.channel?.item || [], client.id);
+        const items = normalizeItems(data?.rss?.channel?.item || [], client.id);
+
+        // Log de timing e resultado por indexador
+        if (query.t !== 'indexers') {
+          const elapsed = Date.now() - t0;
+          const byIndexer = items.reduce((acc, i) => {
+            const name = i.indexerId || 'unknown';
+            acc[name] = (acc[name] || 0) + 1;
+            return acc;
+          }, {});
+          const indexerSummary = Object.entries(byIndexer).map(([k, v]) => `${k}:${v}`).join(', ');
+          console.log(`[JACKETT] client=${client.id} | ${elapsed}ms | total=${items.length} | q="${query.q || ''}" | ${indexerSummary || 'sem resultados'}`);
+        }
+
+        return items;
 
       } else if (type === 'prowlarr') {
         if (query.t === 'indexers') {
@@ -107,8 +122,20 @@ async function searchAllClients(query) {
             if (specificIndexerId !== 'all') params.append('indexerIds', specificIndexerId);
 
             const url = `${client.url}/api/v1/search?${params.toString()}`;
+            const t0 = Date.now();
             const json = await (await fetch(url)).json();
-            return normalizeProwlarrItems(json);
+            const items = normalizeProwlarrItems(json);
+
+            const elapsed = Date.now() - t0;
+            const byIndexer = items.reduce((acc, i) => {
+              const name = i.indexerId || 'unknown';
+              acc[name] = (acc[name] || 0) + 1;
+              return acc;
+            }, {});
+            const indexerSummary = Object.entries(byIndexer).map(([k, v]) => `${k}:${v}`).join(', ');
+            console.log(`[PROWLARR] client=${client.id} | ${elapsed}ms | total=${items.length} | q="${cleanQuery}" | ${indexerSummary || 'sem resultados'}`);
+
+            return items;
         }
       }
     } catch (e) { return []; }
