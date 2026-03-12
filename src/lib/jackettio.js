@@ -229,14 +229,34 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       const words = parseWords(t.name.toLowerCase());
       if (excludeKeywords.find(w => words.includes(w))) return false;
 
-      // Anime: não filtra por SxxExx pois torrents usam numeração absoluta
-      if (searchType === 'series' && !isAnime) {
+      if (searchType === 'series' && episode > 0) {
         const nameUpper = t.name.toUpperCase();
-        const sMatch = nameUpper.match(/S(\d{1,2})/);
+
+        // Verifica padrão SxxExx (usado por séries normais e animes do Nyaa)
+        const sMatch = nameUpper.match(/S(\d{1,2})E(\d{1,4})(?:-?E?(\d{1,4}))?/);
         if (sMatch) {
-          const fileSeason = parseInt(sMatch[1]);
-          if (fileSeason !== season) return false;
+          const fileEpStart = parseInt(sMatch[2]);
+          const fileEpEnd = sMatch[3] ? parseInt(sMatch[3]) : fileEpStart;
+          if (episode < fileEpStart || episode > fileEpEnd) return false;
+          if (!isAnime) {
+            // Para séries normais, também valida a temporada
+            const fileSeason = parseInt(sMatch[1]);
+            if (fileSeason !== season) return false;
+          }
+          return !t.year || t.year === year;
         }
+
+        // Sem SxxExx: para anime tenta numeração absoluta (ex: " - 09 " ou "[09]")
+        if (isAnime) {
+          const absMatch = nameUpper.match(/(?:^|\s|-|\[)0*(\d{1,4})(?:\s|-|\]|$)/g);
+          if (absMatch) {
+            const nums = absMatch.map(m => parseInt(m.replace(/\D/g, '')));
+            if (!nums.includes(episode)) return false;
+          }
+          return !t.year || t.year === year;
+        }
+
+        // Série normal sem SxxExx: filtra por episódio sozinho
         const eMatch = nameUpper.match(/E(\d{1,4})(?:-?E?(\d{1,4}))?/);
         if (eMatch) {
           const fileEpStart = parseInt(eMatch[1]);
@@ -244,6 +264,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
           if (episode < fileEpStart || episode > fileEpEnd) return false;
         }
       }
+
       return !t.year || t.year === year;
     };
 
