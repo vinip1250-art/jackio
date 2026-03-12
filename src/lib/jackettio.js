@@ -212,7 +212,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       maxTorrents,
       sortCached,
       sortUncached,
-      indexerTimeoutSec = 10,
+      indexerTimeoutSec = 5,
       languages = [],
       indexers: userIndexers,
       hideUncached,
@@ -285,14 +285,13 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         )
       )).flat();
     } else {
-      // Para anime, busca apenas pelo nome (sem S/E), e também tenta busca por episódio
       const searches = isAnime
-        ? [
-            jackett.searchSerieTorrents({ ...metaInfos, indexer: 'all' }),
-            episode > 0
-              ? jackett.searchMovieTorrents({ ...metaInfos, name: `${metaInfos.name} ${episode}`, indexer: 'all' })
-              : Promise.resolve([])
-          ]
+        ? indexers.map(i =>
+            promiseTimeout(
+              jackett.searchSerieTorrents({ ...metaInfos, indexer: i.id }),
+              indexerTimeoutSec * 1000
+            ).catch(() => [])
+          )
         : indexers.map(i =>
             promiseTimeout(
               jackett.searchEpisodeTorrents({ ...metaInfos, indexer: i.id }),
