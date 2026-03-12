@@ -175,8 +175,8 @@ app.get("/:userConfig?/manifest.json", async(req, res) => {
     description: config.addonDescription,
     icon: `${protocol}://${hostname}/icon`,
     resources: ["stream"],
-    types: ["movie", "series"],
-    idPrefixes: ["tt"],
+    types: ["movie", "series", "anime"],
+    idPrefixes: ["tt", "kitsu"],
     catalogs: [],
     behaviorHints: {configurable: true}
   };
