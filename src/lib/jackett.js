@@ -175,7 +175,6 @@ async function searchAllClients(query) {
       } else if (type === 'torznab') {
         // --- Clientes Torznab diretos: StremThru, Bitmagnet, Zilean ---
         if (query.t === 'indexers') {
-          // Retorna um indexador sintético representando toda a fonte
           const label = client.sourceName.charAt(0).toUpperCase() + client.sourceName.slice(1);
           return [{
             id: `${client.id}:${client.sourceName}`,
@@ -193,31 +192,48 @@ async function searchAllClients(query) {
           }];
         }
 
-        // Busca Torznab padrão
-        const params = new URLSearchParams({ t: 'search', cat: query.cat || '', q: query.q || '' });
+        // NÃO enviamos "cat" pois StremThru/Zilean/Bitmagnet não mapeiam
+        // as categorias numéricas do Torznab e retornam 0 resultados.
+        const params = new URLSearchParams({ t: 'search', q: query.q || '' });
         if (client.apiKey) params.set('apikey', client.apiKey);
 
         const url = `${client.url}?${params.toString()}`;
         const t0 = Date.now();
-        const res = await fetch(url);
+
+        let res;
+        try {
+          res = await fetch(url);
+        } catch (fetchErr) {
+          console.error(`[TORZNAB:${client.sourceName.toUpperCase()}] Erro de conexão: ${fetchErr.message}`);
+          return [];
+        }
 
         if (!res.ok) {
-          console.warn(`[TORZNAB:${client.sourceName.toUpperCase()}] HTTP ${res.status} para q="${query.q || ''}"`);
+          const body = await res.text().catch(() => '');
+          console.warn(`[TORZNAB:${client.sourceName.toUpperCase()}] HTTP ${res.status} | url=${url} | body=${body.slice(0, 200)}`);
           return [];
         }
 
         const text = await res.text();
-        const parser = new Parser({ explicitArray: false, ignoreAttrs: false });
-        const data = await parser.parseStringPromise(text);
 
-        const rawItems = normalizeItems(data?.rss?.channel?.item || [], client.id);
-        // Sobrescreve indexerId/indexerName com o nome da fonte e propaga flag isCache
-        const items = rawItems.map(item => ({
-          ...item,
-          indexerId:         client.sourceName,
-          indexerName:       client.sourceName,
-          isFromCacheSource: client.isCache,
-        }));
+        // Log do XML bruto para diagnóstico (primeiros 500 chars)
+        console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] RAW response (500): ${text.slice(0, 500)}`);
+
+        let data;
+        try {
+          const parser = new Parser({ explicitArray: false, ignoreAttrs: false });
+          data = await parser.parseStringPromise(text);
+        } catch (parseErr) {
+          console.error(`[TORZNAB:${client.sourceName.toUpperCase()}] Erro de parse XML: ${parseErr.message} | raw=${text.slice(0, 300)}`);
+          return [];
+        }
+
+        const rawItems = data?.rss?.channel?.item;
+        const itemList = rawItems ? (Array.isArray(rawItems) ? rawItems : [rawItems]) : [];
+
+        console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] itens XML brutos: ${itemList.length}`);
+
+        const items = itemList.map(item => normalizeTorznabItem(item, client)).filter(Boolean);
 
         const elapsed = Date.now() - t0;
         console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] ${elapsed}ms | total=${items.length} | q="${query.q || ''}" | isCache=${client.isCache}`);
@@ -314,6 +330,73 @@ function extractDetails(title) {
     else if (title.match(/\b(H264|X264|AVC)\b/)) details.other.push('x264');
 
     return details;
+}
+
+/**
+ * Normaliza um item XML de um endpoint Torznab direto (StremThru, Bitmagnet, Zilean).
+ * Diferente de normalizeItems (que assume campos Jackett), esta função extrai
+ * todos os atributos de forma defensiva e não depende de jackettindexer.
+ */
+function normalizeTorznabItem(raw, client) {
+  try {
+    // Mescla chaves do atributo "$" (xml2js style)
+    const item = mergeDollarKeys(raw);
+
+    // Extrai atributos torznab:attr de forma defensiva
+    const attrRaw = item['torznab:attr'];
+    const attrs = {};
+    if (attrRaw) {
+      const attrList = Array.isArray(attrRaw) ? attrRaw : [attrRaw];
+      for (const a of attrList) {
+        const merged = mergeDollarKeys(a);
+        if (merged.name) attrs[merged.name] = merged.value;
+      }
+    }
+
+    const title = item.title || '';
+    if (!title) return null;
+
+    // Hash e magnet
+    let infoHash = attrs.infohash || '';
+    let magnet   = attrs.magneturl || '';
+    const link   = item.link || '';
+
+    if (!magnet && link.startsWith('magnet:')) magnet = link;
+    if (!infoHash && magnet)  infoHash = extractHash(magnet);
+    if (!infoHash && link && !link.startsWith('magnet:') && !link.startsWith('http')) infoHash = extractHash(link);
+
+    // Qualidade e ano
+    const qualityMatch = title.match(/(2160|1080|720|480|360)p/i);
+    const yearMatch    = title.replace(qualityMatch?.[1] || '', '').match(/(19|20[\d]{2})/);
+
+    // GUID para ID único
+    const guid = item.guid || magnet || infoHash || title;
+
+    console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] item: "${title.slice(0, 70)}" | hash=${infoHash || 'N/A'} | magnet=${magnet ? 'sim' : 'não'}`);
+
+    return {
+      name:              title,
+      guid:              guid,
+      indexerId:         client.sourceName,
+      indexerName:       client.sourceName,
+      id:                crypto.createHash('sha1').update(guid).digest('hex'),
+      size:              parseInt(item.size || attrs.size || 0),
+      link:              link || magnet,
+      seeders:           parseInt(attrs.seeders || 0),
+      peers:             parseInt(attrs.peers   || 0),
+      infoHash:          infoHash,
+      magneturl:         magnet,
+      type:              'movie',
+      quality:           qualityMatch ? parseInt(qualityMatch[1]) : 0,
+      year:              yearMatch    ? parseInt(yearMatch.pop())  : 0,
+      languages:         config.languages.filter(lang => parseWords(title.toLowerCase()).join(' ').match(lang.pattern)),
+      details:           extractDetails(title),
+      isFromCacheSource: client.isCache,
+    };
+  } catch (e) {
+    console.error(`[TORZNAB:${client.sourceName.toUpperCase()}] Erro ao normalizar item: ${e.message}`);
+    return null;
+  }
 }
 
 function normalizeItems(items, clientId){
