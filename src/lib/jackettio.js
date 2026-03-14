@@ -12,9 +12,9 @@ import * as torrentInfos from './torrentInfos.js';
 const kitsuClient = new Kitsu();
 
 const PTBR_KEYWORDS = [
-  'pt-br', 'ptbr', 'portuguese', 'português',
-  'brazilian', 'brasileiro', 'brasil',
-  'dublado', 'nacional', 'por', 'pob',
+  'pt-br', 'ptbr', 'portugues', 'dual-sigma',
+  'brazilian', 'brasil', 'dual-cza', 'dual-xor',
+  'dublado', 'nacional', 'por-br', 'dual-c.a.a',
   'multi-audio', 'multi audio', 'dual audio', 
   'dual-bioma', 'dual-c76', 'andrehsa',
   'c0ral', 'cbr', 'brremux', 'sigla', 
