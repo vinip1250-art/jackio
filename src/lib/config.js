@@ -3,6 +3,8 @@ export default {
   port: parseInt(process.env.PORT || 4000),
   // https://expressjs.com/en/guide/behind-proxies.html
   trustProxy: boolOrString(process.env.TRUST_PROXY || 'loopback, linklocal, uniquelocal'),
+  // Redis URI for caching (replaces SQLite cache.db)
+  redisUri: process.env.REDIS_URI || 'redis://localhost:6379',
   // Jacket instance url
   jackettUrl: process.env.JACKETT_URL || 'http://localhost:9117',
   // Jacket API key
