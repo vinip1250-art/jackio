@@ -173,25 +173,38 @@ export default class RealDebrid {
         if(parts.length > 2) cleanId = parts.slice(1).join(':'); 
     }
     const [torrentId, fileId] = cleanId.split(':');
+    const fileIdNum = fileId ? parseInt(fileId, 10) : null;
 
     let torrent = await this.#request('GET', `/torrents/info/${torrentId}`);
     
     if(torrent.status == 'waiting_files_selection'){
-      let bodyStr = 'files=all';
-      if(fileId) bodyStr = `files=${fileId}`;
-      
+      const bodyStr = fileIdNum ? `files=${fileIdNum}` : 'files=all';
       await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {
           body: bodyStr,
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
       });
-      torrent = await this.#request('GET', `/torrents/info/${torrentId}`);
+
+      // Aguarda até os links estarem prontos (RD processa de forma assíncrona)
+      let retries = 10;
+      while (retries-- > 0) {
+        await new Promise(r => setTimeout(r, 2000));
+        torrent = await this.#request('GET', `/torrents/info/${torrentId}`);
+        if (torrent.status === 'downloaded' && torrent.links?.length > 0) break;
+        if (['error', 'magnet_error', 'virus', 'dead'].includes(torrent.status)) break;
+      }
     }
 
     if(torrent.status == 'magnet_conversion') throw new Error(ERROR.NOT_READY);
+    if(!torrent.links?.length) throw new Error(ERROR.NOT_READY);
 
-    const linkIndex = torrent.files.filter(file => file.selected).findIndex(file => file.id == fileId);
+    // Encontra o índice do link pelo fileId (compara como número)
+    const selectedFiles = torrent.files.filter(f => f.selected);
+    let linkIndex = fileIdNum !== null
+      ? selectedFiles.findIndex(f => parseInt(f.id, 10) === fileIdNum)
+      : 0;
+    if (linkIndex === -1) linkIndex = 0;
+
     const link = torrent.links[linkIndex] || torrent.links[0] || false;
-    
     if(!link) throw new Error(`LinkIndex or link not found`);
 
     const bodyStr = `link=${encodeURIComponent(link)}`;
