@@ -306,14 +306,14 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .sort(sortBy('seeders', true));
 
     torrents = reorderByLanguage(torrents, languages, debug)
-      .slice(0, maxTorrents + 3);
+      .slice(0, maxTorrents + 2);
 
     const t0Infos = Date.now();
     const limit = pLimit(10);
     torrents = (await Promise.all(
       torrents.map(t => limit(async () => {
         try {
-          t.infos = await promiseTimeout(torrentInfos.get(t), 8_000);
+          t.infos = await promiseTimeout(torrentInfos.get(t), 10_000);
           return t;
         } catch(e) {
           return null;
@@ -407,7 +407,7 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
     const size = bytesToSize(file.size || t.size);
     const seeds = t.seeders || 0;
 
-    const isZip = /\.(zip|rar|7z)$/i.test(file.name || t.name);
+    const isZip = /\.(zip|rar|7z|iso)$/i.test(file.name || t.name);
     const sizeStr = isZip ? `📦 ${size}` : `📂 ${size}`;
 
     const langFlag = detectPtBr(t) ? '🇧🇷' : detectMulti(t) ? '🌐' : '';
@@ -443,8 +443,18 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   const { season, episode } = parseStremioId(stremioId);
 
   const cacheKey = `download:${await debridInstance.getUserHash()}:${stremioId}:${torrentId}`;
+
+  // Evita uploads duplicados quando HEAD e GET chegam simultaneamente
+  while (actionInProgress.getDownload[cacheKey]) {
+    await wait(200);
+  }
+
   let download = await cache.get(cacheKey);
   if (download) return download;
+
+  actionInProgress.getDownload[cacheKey] = true;
+
+  try {
 
   // === LÓGICA DE ROTEAMENTO E UPLOAD DE .TORRENT ===
   let files;
@@ -557,4 +567,8 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   await cache.set(cacheKey, download, { ttl: 3600 });
 
   return download;
+
+  } finally {
+    delete actionInProgress.getDownload[cacheKey];
+  }
 }
