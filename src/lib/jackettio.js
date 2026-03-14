@@ -309,11 +309,11 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .slice(0, maxTorrents + 3);
 
     const t0Infos = Date.now();
-    const limit = pLimit(8);
+    const limit = pLimit(10);
     torrents = (await Promise.all(
       torrents.map(t => limit(async () => {
         try {
-          t.infos = await promiseTimeout(torrentInfos.get(t), 10_000);
+          t.infos = await promiseTimeout(torrentInfos.get(t), 9_000);
           return t;
         } catch(e) {
           return null;
@@ -346,10 +346,24 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         })
         .map(t => ({ ...t, isCached: true }));
 
+      // Expande torznabOnlyCached para cada serviço do hybrid (sem shortName definido)
+      let torznabCachedExpanded = torznabOnlyCached;
+      if (debridInstance.constructor.id === 'hybrid') {
+        torznabCachedExpanded = torznabOnlyCached.flatMap(t => [
+          { ...t, id: `rd:${t.id}`, shortName: 'RD', isCached: true },
+          { ...t, infos: { ...t.infos }, id: `tb:${t.id}`, shortName: 'TB', isCached: true }
+        ]);
+      } else if (debridInstance.constructor.id === 'hybridoc') {
+        torznabCachedExpanded = torznabOnlyCached.flatMap(t => [
+          { ...t, id: `tb:${t.id}`, shortName: 'TB', isCached: true },
+          { ...t, infos: { ...t.infos }, id: `oc:${t.id}`, shortName: 'OC', isCached: true }
+        ]);
+      }
+
       // Usa os resultados do debrid diretamente — já têm shortName e id prefixado corretos (rd:/tb:/oc:)
       const cached = [
         ...cachedFromDebrid.map(t => ({ ...t, isCached: true })),
-        ...torznabOnlyCached
+        ...torznabCachedExpanded
       ];
 
       const viaSourceOnly = torznabOnlyCached.length;
