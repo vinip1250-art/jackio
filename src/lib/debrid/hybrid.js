@@ -1,118 +1,95 @@
-import RealDebrid from './realdebrid.js';
 import Torbox from './torbox.js';
+import Offcloud from './offcloud.js';
 
-export default class Hybrid {
+export default class HybridOC {
 
-  static id = 'hybrid';
-  static name = 'Hybrid (RD + Torbox)';
-  static shortName = '[RD+TB]'; 
-  
+  static id = 'hybridoc';
+  static name = 'Hybrid (TB + OC)';
+  static shortName = '[TB+OC]';
+
   static configFields = [
-    { type: 'text', name: 'rdApiKey', label: 'Real-Debrid API Key', required: true, href: {value: 'https://real-debrid.com/apitoken', label:'Get RD Key'} },
-    { type: 'text', name: 'tbApiKey', label: 'Torbox API Key', required: true, href: {value: 'https://torbox.app/settings', label:'Get Torbox Key'} }
+    { type: 'text', name: 'tbApiKey', label: 'Torbox API Key',   required: true, href: { value: 'https://torbox.app/settings',    label: 'Get Torbox Key'   } },
+    { type: 'text', name: 'ocApiKey', label: 'Offcloud API Key', required: true, href: { value: 'https://offcloud.com/#/account',  label: 'Get Offcloud Key' } },
   ];
 
   constructor(userConfig) {
     Object.assign(this, this.constructor);
-    this.rd = new RealDebrid({ ...userConfig, debridApiKey: userConfig.rdApiKey });
-    this.tb = new Torbox({ ...userConfig, debridApiKey: userConfig.tbApiKey });
+    this.tb = new Torbox(   { ...userConfig, debridApiKey: userConfig.tbApiKey });
+    this.oc = new Offcloud( { ...userConfig, debridApiKey: userConfig.ocApiKey });
   }
 
   async getTorrentsCached(torrents) {
-    const rdCached = await this.rd.getTorrentsCached(torrents).catch(() => []);
-    const tbCached = await this.tb.getTorrentsCached(torrents).catch(() => []);
+    const [tbCached, ocCached] = await Promise.all([
+      this.tb.getTorrentsCached(torrents).catch(() => []),
+      this.oc.getTorrentsCached(torrents).catch(() => []),
+    ]);
 
-    const rdHashes = new Set(rdCached.map(t => t.infos.infoHash));
-    const tbHashes = new Set(tbCached.map(t => t.infos.infoHash));
+    const tbHashes = new Set(tbCached.map(t => t.infos?.infoHash).filter(Boolean));
+    const ocHashes = new Set(ocCached.map(t => t.infos?.infoHash).filter(Boolean));
 
-    const finalResults = [];
-
+    const results = [];
     for (const torrent of torrents) {
-        const hash = torrent.infos.infoHash;
-        const inRd = rdHashes.has(hash);
-        const inTb = tbHashes.has(hash);
-        const originalId = torrent.id;
+      const hash = torrent.infos?.infoHash;
+      const inTb = tbHashes.has(hash);
+      const inOc = ocHashes.has(hash);
+      const origId = torrent.id;
 
-        if (inRd && inTb) {
-            torrent.shortName = 'RD';
-            torrent.id = `rd:${originalId}`;
-            finalResults.push(torrent);
-
-            const clone = Object.assign({}, torrent);
-            clone.infos = Object.assign({}, torrent.infos); 
-            clone.shortName = 'TB';
-            clone.id = `tb:${originalId}`;
-            finalResults.push(clone);
-
-        } else if (inRd) {
-            torrent.shortName = 'RD';
-            torrent.id = `rd:${originalId}`;
-            finalResults.push(torrent);
-
-        } else if (inTb) {
-            torrent.shortName = 'TB';
-            torrent.id = `tb:${originalId}`;
-            finalResults.push(torrent);
-        }
+      if (inTb && inOc) {
+        results.push({ ...torrent, shortName: 'TB', id: `tb:${origId}` });
+        results.push({ ...torrent, infos: { ...torrent.infos }, shortName: 'OC', id: `oc:${origId}` });
+      } else if (inTb) {
+        results.push({ ...torrent, shortName: 'TB', id: `tb:${origId}` });
+      } else if (inOc) {
+        results.push({ ...torrent, shortName: 'OC', id: `oc:${origId}` });
+      }
     }
-    return finalResults;
+    return results;
   }
 
-  async getProgressTorrents(torrents) { return {}; }
+  async getProgressTorrents() { return {}; }
 
-  async resolve(magnet) {
-    try { return await this.rd.resolve(magnet); } 
-    catch (error) { return await this.tb.resolve(magnet); }
-  }
-
-  // Estes métodos de fallback usam RD primeiro (padrão antigo),
-  // mas o jackettio.js agora vai ignorar isso se tiver prefixo!
   async getFilesFromMagnet(magnet, infoHash) {
     try {
-        const files = await this.rd.getFilesFromMagnet(magnet, infoHash);
-        return files.map(f => ({...f, id: `rd:${f.id}`}));
-    } catch (e) {
-        const files = await this.tb.getFilesFromMagnet(magnet, infoHash);
-        return files.map(f => ({...f, id: `tb:${f.id}`}));
+      const files = await this.tb.getFilesFromMagnet(magnet, infoHash);
+      return files.map(f => ({ ...f, id: `tb:${f.id}` }));
+    } catch {
+      const files = await this.oc.getFilesFromMagnet(magnet, infoHash);
+      return files.map(f => ({ ...f, id: `oc:${f.id}` }));
     }
   }
 
   async getFilesFromBuffer(buffer, infoHash) {
     try {
-      const files = await this.rd.getFilesFromBuffer(buffer, infoHash);
-      return files.map(f => ({...f, id: `rd:${f.id}`}));
-    } catch (e) {
       const files = await this.tb.getFilesFromBuffer(buffer, infoHash);
-      return files.map(f => ({...f, id: `tb:${f.id}`}));
+      return files.map(f => ({ ...f, id: `tb:${f.id}` }));
+    } catch {
+      const files = await this.oc.getFilesFromBuffer(buffer, infoHash);
+      return files.map(f => ({ ...f, id: `oc:${f.id}` }));
     }
   }
 
   async getFilesFromHash(infoHash) {
-     try {
-        const files = await this.rd.getFilesFromHash(infoHash);
-        return files.map(f => ({...f, id: `rd:${f.id}`}));
-     } catch(e) {
-        const files = await this.tb.getFilesFromHash(infoHash);
-        return files.map(f => ({...f, id: `tb:${f.id}`}));
-     }
-  }
-  
-  async getDownload(file) {
-    const [servicePrefix, ...rest] = file.id.split(':');
-    const originalFileId = rest.join(':');
-    const fileForService = { ...file, id: originalFileId };
-
-    if (servicePrefix === 'rd') {
-        return await this.rd.getDownload(fileForService);
-    } else if (servicePrefix === 'tb') {
-        return await this.tb.getDownload(fileForService);
-    } else {
-        return await this.rd.getDownload(file);
+    try {
+      const files = await this.tb.getFilesFromHash(infoHash);
+      return files.map(f => ({ ...f, id: `tb:${f.id}` }));
+    } catch {
+      const files = await this.oc.getFilesFromHash(infoHash);
+      return files.map(f => ({ ...f, id: `oc:${f.id}` }));
     }
   }
 
+  async getDownload(file) {
+    const [prefix, ...rest] = file.id.split(':');
+    const cleanId = rest.join(':');
+    const fileForService = { ...file, id: cleanId };
+
+    if (prefix === 'tb') return this.tb.getDownload(fileForService);
+    if (prefix === 'oc') return this.oc.getDownload(fileForService);
+    return this.tb.getDownload(file);
+  }
+
   async getUserHash() {
-    const rdHash = await this.rd.getUserHash();
-    return rdHash + '_hybrid';
+    const h = await this.tb.getUserHash();
+    return h + '_hybridoc';
   }
 }
