@@ -15,8 +15,10 @@ const PTBR_KEYWORDS = [
   'pt-br', 'ptbr', 'portuguese', 'português',
   'brazilian', 'brasileiro', 'brasil',
   'dublado', 'nacional', 'por', 'pob',
-  'multi-audio', 'multi audio', 'dual audio' , 
-  'dual-bioma' , 'dual-c76' , 'andrehsa'
+  'multi-audio', 'multi audio', 'dual audio', 
+  'dual-bioma', 'dual-c76', 'andrehsa',
+  'c0ral', 'cbr', 'brremux', 'sigla', 
+  'brremux', 'arcanjo', 'dual-nogroup'
 ];
 
 function normalizeLanguages(langs) {
@@ -336,13 +338,6 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
 
       const debridCachedIds    = new Set(cachedFromDebrid.map(t => t.id));
       const debridCachedHashes = new Set(cachedFromDebrid.map(t => (t.infos?.infoHash || t.infoHash || '').toLowerCase()).filter(Boolean));
-
-      // Log de diagnóstico: mostra os hashes dos torrents vs amostra dos hashes torznab
-      if (cacheSourceHashes.size > 0) {
-        const torrentHashes = torrentsWithHash.map(t => (t.infos?.infoHash || '').toLowerCase()).filter(Boolean);
-        const sample = [...cacheSourceHashes].slice(0, 3);
-        console.log(`[${stremioId}] hash check | torrents=[${torrentHashes.slice(0,2).join(', ')}] | torznab sample=[${sample.join(', ')}]`);
-      }
 
       const cached = torrentsWithHash
         .filter(t => {
