@@ -283,12 +283,10 @@ export async function searchCacheSources({ q, imdbId }) {
           const params = new URLSearchParams({ t: 'movie', imdbid: imdbId.replace('tt', '') });
           if (client.apiKey) params.set('apikey', client.apiKey);
           url = `${client.url}?${params.toString()}`;
-          console.log(`[TORZNAB:ZILEAN] buscando por imdbid=${imdbId} | url=${url}`);
         } else {
           const params = new URLSearchParams({ t: 'search', q: q || '' });
           if (client.apiKey) params.set('apikey', client.apiKey);
           url = `${client.url}?${params.toString()}`;
-          console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] buscando por q="${q}" | url=${url}`);
         }
 
         const res = await fetch(url);
@@ -298,7 +296,6 @@ export async function searchCacheSources({ q, imdbId }) {
         }
 
         const text = await res.text();
-        console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] RAW (300): ${text.slice(0, 300)}`);
 
         let data;
         try {
@@ -311,7 +308,6 @@ export async function searchCacheSources({ q, imdbId }) {
 
         const rawItems = data?.rss?.channel?.item;
         const itemList = rawItems ? (Array.isArray(rawItems) ? rawItems : [rawItems]) : [];
-        console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] itens: ${itemList.length}`);
 
         const hashes = itemList.map(raw => {
           try {
@@ -326,22 +322,16 @@ export async function searchCacheSources({ q, imdbId }) {
               }
             }
 
-            // Tenta obter hash de infohash, magnet ou link
             let hash = normalizeHash(attrs.infohash || '');
             if (!hash) {
               const magnet = attrs.magneturl || item.link || '';
-              const extracted = extractHash(magnet);
-              hash = normalizeHash(extracted);
-            }
-
-            if (hash) {
-              console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] hash encontrado: ${hash} | "${(item.title || '').slice(0, 60)}"`);
+              hash = normalizeHash(extractHash(magnet));
             }
             return hash || null;
           } catch { return null; }
         }).filter(Boolean);
 
-        console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] ${Date.now()-t0}ms | ${hashes.length} hashes válidos`);
+        console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] ${Date.now()-t0}ms | hashes=${hashes.length}${imdbId ? ` imdbid=${imdbId}` : ` q="${q}"`}`);
         return hashes;
       } catch (e) {
         console.error(`[TORZNAB:${client.sourceName.toUpperCase()}] Erro: ${e.message}`);
@@ -351,7 +341,6 @@ export async function searchCacheSources({ q, imdbId }) {
   );
 
   const allHashes = new Set(results.flat());
-  console.log(`[TORZNAB] total hashes de cache sources: ${allHashes.size}`);
   return allHashes;
 }
 
