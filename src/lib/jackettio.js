@@ -268,7 +268,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
     let indexers = (await jackett.getIndexers())
       .filter(i => i.searching[searchType]?.available && (userIndexers.includes('all') || userIndexers.includes(i.id)));
 
-    console.log(`[DEBUG] type=${type} isAnime=${isAnime} indexers=${indexers.length} name="${metaInfos.name}" ep=${episode}`);
+    console.log(`[${stremioId}] type=${type} indexers=${indexers.length} name="${metaInfos.name}"${episode ? ` ep=S${String(season).padStart(2,'0')}E${String(episode).padStart(2,'0')}` : ''}`);
 
     let torrents = [];
 
@@ -301,80 +301,61 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
 
     torrents = torrents
       .filter(filterSearch)
-      .filter(t => {
-        const indexer = (t.indexerName || t.indexerId || t.indexer || '').toLowerCase().trim();
-        console.log(`[INDEXER_ID] "${indexer}" | ${t.name?.slice(0, 60)}`);
-        return true;
-      })
       .sort(sortBy('seeders', true));
-
-    console.log(`[DEBUG] após filtros: ${torrents.length}`);
 
     torrents = reorderByLanguage(torrents, languages, debug)
       .slice(0, maxTorrents + 3);
 
-    console.log(`[DEBUG] enviando para torrentInfos: ${torrents.length}`);
-
+    const t0Infos = Date.now();
     const limit = pLimit(5);
     torrents = (await Promise.all(
       torrents.map(t => limit(async () => {
-        const t0 = Date.now();
         try {
           t.infos = await promiseTimeout(torrentInfos.get(t), 30_000);
-          console.log(`[INFOS] ✅ ${(Date.now()-t0)}ms | hash=${t.infos?.infoHash || 'N/A'} | ${t.name?.slice(0,60)}`);
           return t;
         } catch(e) {
-          console.log(`[INFOS] ❌ ${(Date.now()-t0)}ms | erro=${e?.message || 'timeout'} | ${t.name?.slice(0,60)}`);
           return null;
         }
       }))
     )).filter(Boolean);
-
-    console.log(`[DEBUG] após torrentInfos: ${torrents.length} | sem infoHash: ${torrents.filter(t => !t.infos?.infoHash).length}`);
+    console.log(`[${stremioId}] torrentInfos: ${torrents.length} em ${Date.now()-t0Infos}ms | sem hash: ${torrents.filter(t => !t.infos?.infoHash).length}`);
 
     if (debridInstance) {
       const torrentsWithHash = torrents.filter(t => t.infos?.infoHash);
-      console.log(`[DEBUG] enviando para cache check: ${torrentsWithHash.length} (${torrents.length - torrentsWithHash.length} sem hash ignorados)`);
 
-      // Monta query para fontes torznab
-      // imdbId é usado pelo Zilean (muito mais preciso que busca textual)
       const imdbId = metaInfos.id?.startsWith('tt') ? metaInfos.id : null;
       const cacheQ = (searchType === 'series' && episode > 0)
         ? `${metaInfos.name} S${String(season).padStart(2,'0')}E${String(episode).padStart(2,'0')}`
         : metaInfos.name;
 
-      // Busca paralela: fontes torznab + debrid
       const t0Cache = Date.now();
       const [cacheSourceHashes, cachedFromDebrid] = await Promise.all([
         jackett.searchCacheSources({ q: cacheQ, imdbId }),
         debridInstance.getTorrentsCached(torrentsWithHash)
       ]);
 
-      console.log(`[DEBUG] cache check em ${Date.now()-t0Cache}ms | torznab hashes=${cacheSourceHashes.size} | debrid cached=${cachedFromDebrid.length}`);
-
-      // Marca como cached: encontrado no debrid OU hash presente nas fontes torznab
-      const debridCachedIds = new Set(cachedFromDebrid.map(t => t.id));
+      const debridCachedIds    = new Set(cachedFromDebrid.map(t => t.id));
+      const debridCachedHashes = new Set(cachedFromDebrid.map(t => (t.infos?.infoHash || t.infoHash || '').toLowerCase()).filter(Boolean));
       const cached = torrentsWithHash
         .filter(t => {
           const hash = (t.infos?.infoHash || '').toLowerCase();
-          const inDebrid  = debridCachedIds.has(t.id) || debridCachedIds.has(`rd:${t.id}`) || debridCachedIds.has(`tb:${t.id}`);
+          const inDebrid  = debridCachedIds.has(t.id) || debridCachedIds.has(`rd:${t.id}`) || debridCachedIds.has(`tb:${t.id}`)
+                         || (hash && debridCachedHashes.has(hash));
           const inSources = hash && cacheSourceHashes.has(hash);
-          console.log(`[CACHE_CHECK] hash=${hash} | debrid=${inDebrid} | torznab=${inSources} | "${t.name?.slice(0,50)}"`);
           return inDebrid || inSources;
         })
         .map(t => ({ ...t, isCached: true }));
 
-      console.log(`[DEBUG] total cached: ${cached.length} (${cached.filter(t => {
+      const viaSourceOnly = cached.filter(t => {
         const hash = (t.infos?.infoHash || '').toLowerCase();
-        return hash && cacheSourceHashes.has(hash) && !debridCachedIds.has(t.id);
-      }).length} só via torznab)`);
+        return hash && cacheSourceHashes.has(hash) && !debridCachedHashes.has(hash) && !debridCachedIds.has(t.id);
+      }).length;
 
       let uncached = torrents.filter(t => {
         const isCached = cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
         if (isCached) return false;
         return (t.seeders || 0) >= MIN_SEEDS_UNCACHED;
       });
-      console.log(`[DEBUG] uncached (seeds >= ${MIN_SEEDS_UNCACHED}): ${uncached.length}`);
 
       if (debridInstance.constructor.id === 'hybrid') {
         const rdUncached = uncached.map(t => ({
@@ -392,17 +373,14 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         uncached = [...rdUncached, ...tbUncached];
       }
 
-      if (hideUncached) {
-        console.log(`[DEBUG] hideUncached=true → removendo ${uncached.length} não-cacheados`);
-        uncached = [];
-      }
+      if (hideUncached) uncached = [];
 
       torrents = [
         ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages, debug),
         ...reorderByLanguage(uncached.sort(sortBy(...sortUncached)), languages, debug)
       ].slice(0, maxTorrents);
 
-      console.log(`[DEBUG] resultado final: ${torrents.length} streams (${cached.length} cached, ${uncached.length} uncached)`);
+      console.log(`[${stremioId}] cache ${Date.now()-t0Cache}ms | cached=${cached.length} (debrid=${cached.length - viaSourceOnly} torznab=${viaSourceOnly}) uncached=${uncached.length} | final=${torrents.length}`);
     }
 
     return torrents;
