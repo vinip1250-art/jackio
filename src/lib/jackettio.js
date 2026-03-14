@@ -306,9 +306,12 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .filter(filterSearch)
       .filter(t => {
         const indexer = (t.indexerName || t.indexerId || t.indexer || '').toLowerCase().trim();
-        console.log(`[INDEXER_ID] "${indexer}" | ${t.name?.slice(0, 60)}`); 
-        const isStremThru = indexer.includes('stremthru');
-        if (isStremThru) {
+        console.log(`[INDEXER_ID] "${indexer}" | cache=${t.isFromCacheSource ? 'yes' : 'no'} | ${t.name?.slice(0, 60)}`);
+        // O filtro PT_GROUPS_REGEX só se aplica ao StremThru quando vem como
+        // indexador do Jackett (sem a flag isFromCacheSource).
+        // Quando vem via integração Torznab direta (isFromCacheSource=true),
+        // os resultados já são do cache do debrid e não devem ser filtrados.
+        if (!t.isFromCacheSource && indexer.includes('stremthru')) {
           return PT_GROUPS_REGEX.test(t.name || '');
         }
         return true;
