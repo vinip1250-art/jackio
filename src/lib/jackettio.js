@@ -336,17 +336,17 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       const torrentsWithHash = torrents.filter(t => t.infos?.infoHash);
       console.log(`[DEBUG] enviando para cache check: ${torrentsWithHash.length} (${torrents.length - torrentsWithHash.length} sem hash ignorados)`);
 
-      // Monta a query de título para buscar nas fontes torznab
+      // Monta query para fontes torznab
+      // imdbId é usado pelo Zilean (muito mais preciso que busca textual)
+      const imdbId = metaInfos.id?.startsWith('tt') ? metaInfos.id : null;
       const cacheQ = (searchType === 'series' && episode > 0)
         ? `${metaInfos.name} S${String(season).padStart(2,'0')}E${String(episode).padStart(2,'0')}`
         : metaInfos.name;
 
-      // Busca paralela: fontes torznab (StremThru/Zilean/Bitmagnet) + debrid
-      // As fontes torznab retornam hashes do que já está cacheado no debrid.
-      // Comparamos esses hashes com os torrents do Jackett para marcar como cached.
+      // Busca paralela: fontes torznab + debrid
       const t0Cache = Date.now();
       const [cacheSourceHashes, cachedFromDebrid] = await Promise.all([
-        jackett.searchCacheSources({ q: cacheQ }),
+        jackett.searchCacheSources({ q: cacheQ, imdbId }),
         debridInstance.getTorrentsCached(torrentsWithHash)
       ]);
 
@@ -356,14 +356,18 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       const debridCachedIds = new Set(cachedFromDebrid.map(t => t.id));
       const cached = torrentsWithHash
         .filter(t => {
+          const hash = (t.infos?.infoHash || '').toLowerCase();
           const inDebrid  = debridCachedIds.has(t.id) || debridCachedIds.has(`rd:${t.id}`) || debridCachedIds.has(`tb:${t.id}`);
-          const inSources = cacheSourceHashes.has((t.infos?.infoHash || '').toLowerCase());
-          if (inSources && !inDebrid) console.log(`[CACHE:SOURCE] ${t.name?.slice(0,60)}`);
+          const inSources = hash && cacheSourceHashes.has(hash);
+          console.log(`[CACHE_CHECK] hash=${hash} | debrid=${inDebrid} | torznab=${inSources} | "${t.name?.slice(0,50)}"`);
           return inDebrid || inSources;
         })
         .map(t => ({ ...t, isCached: true }));
 
-      console.log(`[DEBUG] total cached: ${cached.length}`);
+      console.log(`[DEBUG] total cached: ${cached.length} (${cached.filter(t => {
+        const hash = (t.infos?.infoHash || '').toLowerCase();
+        return hash && cacheSourceHashes.has(hash) && !debridCachedIds.has(t.id);
+      }).length} só via torznab)`);
 
       let uncached = torrents.filter(t => {
         const isCached = cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
