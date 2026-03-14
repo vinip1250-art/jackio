@@ -413,6 +413,8 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
     const col2 = `⚙️ ${t.indexerName || t.indexerId} ${langFlag}`;
     const col3 = file.name || t.name;
 
+    // Para hybrid, o shortName já está definido por torrent (TB/OC/RD).
+    // Para serviço simples, usa o shortName da instância.
     const service = t.shortName || debridInstance.shortName;
     const cacheSign = t.isCached ? '⚡' : '';
 
@@ -430,7 +432,7 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   userConfig = await mergeDefaultUserConfig(userConfig);
   const debridInstance = debrid.instance(userConfig);
 
-  let cleanId = torrentId.includes(':') && (torrentId.startsWith('rd:') || torrentId.startsWith('tb:'))
+  let cleanId = torrentId.includes(':') && (torrentId.startsWith('rd:') || torrentId.startsWith('tb:') || torrentId.startsWith('oc:'))
     ? torrentId.split(':').slice(1).join(':')
     : torrentId;
 
