@@ -306,10 +306,10 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .sort(sortBy('seeders', true));
 
     torrents = reorderByLanguage(torrents, languages, debug)
-      .slice(0, maxTorrents + 2);
+      .slice(0, maxTorrents + 3);
 
     const t0Infos = Date.now();
-    const limit = pLimit(10);
+    const limit = pLimit(8);
     torrents = (await Promise.all(
       torrents.map(t => limit(async () => {
         try {
@@ -336,37 +336,40 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         debridInstance.getTorrentsCached(torrentsWithHash)
       ]);
 
-      const debridCachedIds    = new Set(cachedFromDebrid.map(t => t.id));
       const debridCachedHashes = new Set(cachedFromDebrid.map(t => (t.infos?.infoHash || t.infoHash || '').toLowerCase()).filter(Boolean));
 
-      const cached = torrentsWithHash
+      // Torrents cached via fontes torznab (hash conhecido mas não confirmado pelo debrid)
+      const torznabOnlyCached = torrentsWithHash
         .filter(t => {
           const hash = (t.infos?.infoHash || '').toLowerCase();
-          const inDebrid  = debridCachedIds.has(t.id) || debridCachedIds.has(`rd:${t.id}`) || debridCachedIds.has(`tb:${t.id}`)
-                         || (hash && debridCachedHashes.has(hash));
-          const inSources = hash && cacheSourceHashes.has(hash);
-          return inDebrid || inSources;
+          return !debridCachedHashes.has(hash) && hash && cacheSourceHashes.has(hash);
         })
         .map(t => ({ ...t, isCached: true }));
 
-      const viaSourceOnly = cached.filter(t => {
-        const hash = (t.infos?.infoHash || '').toLowerCase();
-        return hash && cacheSourceHashes.has(hash) && !debridCachedHashes.has(hash) && !debridCachedIds.has(t.id);
-      }).length;
+      // Usa os resultados do debrid diretamente — já têm shortName e id prefixado corretos (rd:/tb:/oc:)
+      const cached = [
+        ...cachedFromDebrid.map(t => ({ ...t, isCached: true })),
+        ...torznabOnlyCached
+      ];
 
-      let uncached = torrents.filter(t => {
-        const isCached = cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
-        if (isCached) return false;
+      const viaSourceOnly = torznabOnlyCached.length;
+
+      // Exclui do uncached qualquer hash já presente nos cached
+      const cachedHashes = new Set(cached.map(t => (t.infos?.infoHash || '').toLowerCase()).filter(Boolean));
+      let uncached = torrentsWithHash.filter(t => {
+        const hash = (t.infos?.infoHash || '').toLowerCase();
+        if (hash && cachedHashes.has(hash)) return false;
         return (t.seeders || 0) >= MIN_SEEDS_UNCACHED;
       });
 
-      if (debridInstance.constructor.id === 'hybrid') {
-        const rdUncached = uncached.map(t => ({ ...t, id: `rd:${t.id}`, shortName: 'RD', name: `[RD] ${t.name}` }));
-        const tbUncached = uncached.map(t => ({ ...t, id: `tb:${t.id}`, shortName: 'TB', name: `[TB] ${t.name}` }));
+      const debridId = debridInstance.constructor.id;
+      if (debridId === 'hybrid') {
+        const rdUncached = uncached.map(t => ({ ...t, id: `rd:${t.id}`, shortName: 'RD' }));
+        const tbUncached = uncached.map(t => ({ ...t, id: `tb:${t.id}`, shortName: 'TB' }));
         uncached = [...rdUncached, ...tbUncached];
-      } else if (debridInstance.constructor.id === 'hybridoc') {
-        const tbUncached = uncached.map(t => ({ ...t, id: `tb:${t.id}`, shortName: 'TB', name: `[TB] ${t.name}` }));
-        const ocUncached = uncached.map(t => ({ ...t, id: `oc:${t.id}`, shortName: 'OC', name: `[OC] ${t.name}` }));
+      } else if (debridId === 'hybridoc') {
+        const tbUncached = uncached.map(t => ({ ...t, id: `tb:${t.id}`, shortName: 'TB' }));
+        const ocUncached = uncached.map(t => ({ ...t, id: `oc:${t.id}`, shortName: 'OC' }));
         uncached = [...tbUncached, ...ocUncached];
       }
 
