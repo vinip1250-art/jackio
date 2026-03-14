@@ -306,14 +306,14 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .sort(sortBy('seeders', true));
 
     torrents = reorderByLanguage(torrents, languages, debug)
-      .slice(0, maxTorrents + 3);
+      .slice(0, maxTorrents + 1);
 
     const t0Infos = Date.now();
-    const limit = pLimit(5);
+    const limit = pLimit(10);
     torrents = (await Promise.all(
       torrents.map(t => limit(async () => {
         try {
-          t.infos = await promiseTimeout(torrentInfos.get(t), 30_000);
+          t.infos = await promiseTimeout(torrentInfos.get(t), 10_000);
           return t;
         } catch(e) {
           return null;
