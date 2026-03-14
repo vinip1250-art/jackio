@@ -306,14 +306,14 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .sort(sortBy('seeders', true));
 
     torrents = reorderByLanguage(torrents, languages, debug)
-      .slice(0, maxTorrents + 1);
+      .slice(0, maxTorrents + 3);
 
     const t0Infos = Date.now();
     const limit = pLimit(10);
     torrents = (await Promise.all(
       torrents.map(t => limit(async () => {
         try {
-          t.infos = await promiseTimeout(torrentInfos.get(t), 10_000);
+          t.infos = await promiseTimeout(torrentInfos.get(t), 8_000);
           return t;
         } catch(e) {
           return null;
@@ -332,7 +332,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
 
       const t0Cache = Date.now();
       const [cacheSourceHashes, cachedFromDebrid] = await Promise.all([
-        jackett.searchCacheSources({ q: cacheQ, imdbId }),
+        jackett.searchCacheSources({ q: cacheQ, imdbId, type: searchType }),
         debridInstance.getTorrentsCached(torrentsWithHash)
       ]);
 
