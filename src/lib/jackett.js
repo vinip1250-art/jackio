@@ -70,16 +70,16 @@ async function detectClientType(client) {
   return client.type = 'error';
 }
 
-// --- BUSCA UNIFICADA ---
+// --- BUSCA UNIFICADA (apenas Jackett/Prowlarr) ---
 async function searchAllClients(query) {
-  let targetClients = clients;
+  let targetClients = jackettClients;
   let specificIndexerId = query.indexer || 'all';
 
   if (specificIndexerId !== 'all' && specificIndexerId.includes(':')) {
     const parts = specificIndexerId.split(':');
     const cId = parseInt(parts[0]);
     specificIndexerId = parts.slice(1).join(':'); 
-    targetClients = clients.filter(c => c.id === cId);
+    targetClients = jackettClients.filter(c => c.id === cId);
   }
 
   const promises = targetClients.map(async (client) => {
