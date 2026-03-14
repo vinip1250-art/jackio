@@ -3,9 +3,10 @@ import alldebrid from "./debrid/alldebrid.js";
 import realdebrid from './debrid/realdebrid.js';
 import premiumize from './debrid/premiumize.js';
 import torrserver from './debrid/torrserver.js';
-// Importações corrigidas (sem chaves, pois agora são export default):
 import torbox from './debrid/torbox.js'; 
 import hybrid from './debrid/hybrid.js'; 
+import offcloud from './debrid/offcloud.js';
+import hybridoc from './debrid/hybrid-oc.js';
 
 export {ERROR} from './debrid/const.js';
 
@@ -17,7 +18,9 @@ const debrid = {
   premiumize, 
   torrserver, 
   torbox, 
-  hybrid 
+  hybrid,
+  offcloud,
+  hybridoc
 };
 
 export function instance(userConfig){
