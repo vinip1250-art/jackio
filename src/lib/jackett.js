@@ -28,7 +28,7 @@ const jackettClients = rawUrls.map((url, index) => ({
 // Bitmagnet é um indexador geral (P2P), tratado como não-cacheado normalmente.
 const TORZNAB_SOURCES = [
   { name: 'stremthru', urlKey: 'STREMTHRU_URL', keyKey: 'STREMTHRU_API_KEY', isCache: true  },
-  { name: 'bitmagnet', urlKey: 'BITMAGNET_URL',  keyKey: 'BITMAGNET_API_KEY', isCache: false },
+  { name: 'bitmagnet', urlKey: 'BITMAGNET_URL',  keyKey: 'BITMAGNET_API_KEY', isCache: true },
   { name: 'zilean',    urlKey: 'ZILEAN_URL',      keyKey: 'ZILEAN_API_KEY',    isCache: true  },
 ];
 
