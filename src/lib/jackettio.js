@@ -105,9 +105,6 @@ function searchEpisodeFile(files, season, episode) {
     || files[0];
 }
 
-// Regex dos grupos PT-BR — aplicada apenas para torrents do indexador StremThru
-const PT_GROUPS_REGEX = /brremux|-cza|c0ral|-cory|cypher|-tars|freddiegellar|sgf|asc|alfahd|kallango|-lcd|dual-bioma|dual-c76|-ff|-fly|anitsu|potatin|vinci|gueira|tossato|7sprit7|c\.a\.a|cbr|-nogroup|dual-brpny|-pia|-xor|g4ris|sigma|andrehsa|riper|sigla|sh4down|gjumandi|silveira|tontom|eck|arcanjo|bj-share|epik|gusta|crime|maestro|ingram|hdtv-br|bdrip-br|batata|cinefoot|savana|coala|nyne|hmax/i;
-
 // Seeds mínimos para exibir torrents não cacheados
 const MIN_SEEDS_UNCACHED = 1;
 
@@ -306,7 +303,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .filter(filterSearch)
       .filter(t => {
         const indexer = (t.indexerName || t.indexerId || t.indexer || '').toLowerCase().trim();
-        console.log(`[INDEXER_ID] "${indexer}" | cache=${t.isFromCacheSource ? 'yes' : 'no'} | ${t.name?.slice(0, 60)}`);
+        console.log(`[INDEXER_ID] "${indexer}" | ${t.name?.slice(0, 60)}`);
         return true;
       })
       .sort(sortBy('seeders', true));
@@ -339,26 +336,34 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       const torrentsWithHash = torrents.filter(t => t.infos?.infoHash);
       console.log(`[DEBUG] enviando para cache check: ${torrentsWithHash.length} (${torrents.length - torrentsWithHash.length} sem hash ignorados)`);
 
-      // Separa torrents de fontes de cache (StremThru, Zilean) dos demais.
-      // Fontes de cache indexam conteúdo que já está disponível em debrids,
-      // então seus resultados são marcados como cached diretamente, sem precisar
-      // consultar o debrid (o que economiza tempo e evita limitações de rate-limit).
-      const preCachedTorrents = torrentsWithHash.filter(t => t.isFromCacheSource);
-      const regularTorrents   = torrentsWithHash.filter(t => !t.isFromCacheSource);
+      // Monta a query de título para buscar nas fontes torznab
+      const cacheQ = (searchType === 'series' && episode > 0)
+        ? `${metaInfos.name} S${String(season).padStart(2,'0')}E${String(episode).padStart(2,'0')}`
+        : metaInfos.name;
 
-      console.log(`[DEBUG] pré-cacheados (StremThru/Zilean): ${preCachedTorrents.length} | verificação debrid: ${regularTorrents.length}`);
+      // Busca paralela: fontes torznab (StremThru/Zilean/Bitmagnet) + debrid
+      // As fontes torznab retornam hashes do que já está cacheado no debrid.
+      // Comparamos esses hashes com os torrents do Jackett para marcar como cached.
+      const t0Cache = Date.now();
+      const [cacheSourceHashes, cachedFromDebrid] = await Promise.all([
+        jackett.searchCacheSources({ q: cacheQ }),
+        debridInstance.getTorrentsCached(torrentsWithHash)
+      ]);
 
-      const t0Debrid = Date.now();
-      const cachedFromDebrid = regularTorrents.length > 0
-        ? (await debridInstance.getTorrentsCached(regularTorrents)).map(t => ({ ...t, isCached: true }))
-        : [];
-      console.log(`[DEBUG] cache check debrid em ${Date.now()-t0Debrid}ms → cached: ${cachedFromDebrid.length}`);
+      console.log(`[DEBUG] cache check em ${Date.now()-t0Cache}ms | torznab hashes=${cacheSourceHashes.size} | debrid cached=${cachedFromDebrid.length}`);
 
-      // Torrents de fontes de cache são automaticamente marcados como isCached
-      const cachedFromSources = preCachedTorrents.map(t => ({ ...t, isCached: true }));
+      // Marca como cached: encontrado no debrid OU hash presente nas fontes torznab
+      const debridCachedIds = new Set(cachedFromDebrid.map(t => t.id));
+      const cached = torrentsWithHash
+        .filter(t => {
+          const inDebrid  = debridCachedIds.has(t.id) || debridCachedIds.has(`rd:${t.id}`) || debridCachedIds.has(`tb:${t.id}`);
+          const inSources = cacheSourceHashes.has((t.infos?.infoHash || '').toLowerCase());
+          if (inSources && !inDebrid) console.log(`[CACHE:SOURCE] ${t.name?.slice(0,60)}`);
+          return inDebrid || inSources;
+        })
+        .map(t => ({ ...t, isCached: true }));
 
-      const cached = [...cachedFromDebrid, ...cachedFromSources];
-      console.log(`[DEBUG] total cached: ${cached.length} (debrid=${cachedFromDebrid.length} + fontes=${cachedFromSources.length})`);
+      console.log(`[DEBUG] total cached: ${cached.length}`);
 
       let uncached = torrents.filter(t => {
         const isCached = cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
