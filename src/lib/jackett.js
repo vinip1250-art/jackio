@@ -181,44 +181,49 @@ async function searchAllClients(query) {
   return results.flat();
 }
 
+// TTL dos resultados de busca por indexador.
+// 6h é suficiente para evitar buscas repetidas sem deixar resultados
+// antigos por tempo excessivo quando o usuário muda indexadores.
+const SEARCH_CACHE_TTL = 3600 * 6;
+
 // --- EXPORTAÇÕES ---
 export async function searchMovieTorrents({indexer, name, year}){
   indexer = indexer || 'all';
-  const cacheKey = `jackettItems:2:movie:${indexer}:${name}:${year}`;
+  const cacheKey = `jackettItems:3:movie:${indexer}:${name}:${year}`;
   let items = await cache.get(cacheKey);
   if(!items){
     items = await searchAllClients({t: 'search', cat: CATEGORY.MOVIE, q: name, indexer: indexer});
-    cache.set(cacheKey, items, {ttl: items.length > 0 ? 3600*36 : 60});
+    if (items.length > 0) cache.set(cacheKey, items, {ttl: SEARCH_CACHE_TTL});
   }
   return items;
 }
 export async function searchSerieTorrents({indexer, name, year}){
   indexer = indexer || 'all';
-  const cacheKey = `jackettItems:2:serie:${indexer}:${name}:${year}`;
+  const cacheKey = `jackettItems:3:serie:${indexer}:${name}:${year}`;
   let items = await cache.get(cacheKey);
   if(!items){
     items = await searchAllClients({t: 'search', cat: CATEGORY.SERIES, q: `${name}`, indexer: indexer});
-    cache.set(cacheKey, items, {ttl: items.length > 0 ? 3600*36 : 60});
+    if (items.length > 0) cache.set(cacheKey, items, {ttl: SEARCH_CACHE_TTL});
   }
   return items;
 }
 export async function searchSeasonTorrents({indexer, name, year, season}){
   indexer = indexer || 'all';
-  const cacheKey = `jackettItems:2:season:${indexer}:${name}:${year}:${season}`;
+  const cacheKey = `jackettItems:3:season:${indexer}:${name}:${year}:${season}`;
   let items = await cache.get(cacheKey);
   if(!items){
     items = await searchAllClients({t: 'search', cat: CATEGORY.SERIES, q: `${name} S${numberPad(season)}`, indexer: indexer});
-    cache.set(cacheKey, items, {ttl: items.length > 0 ? 3600*36 : 60});
+    if (items.length > 0) cache.set(cacheKey, items, {ttl: SEARCH_CACHE_TTL});
   }
   return items;
 }
 export async function searchEpisodeTorrents({indexer, name, year, season, episode}){
   indexer = indexer || 'all';
-  const cacheKey = `jackettItems:2:episode:${indexer}:${name}:${year}:${season}:${episode}`;
+  const cacheKey = `jackettItems:3:episode:${indexer}:${name}:${year}:${season}:${episode}`;
   let items = await cache.get(cacheKey);
   if(!items){
     items = await searchAllClients({t: 'search', cat: CATEGORY.SERIES, q: `${name} S${numberPad(season)}E${numberPad(episode)}`, indexer: indexer});
-    cache.set(cacheKey, items, {ttl: items.length > 0 ? 3600*36 : 60});
+    if (items.length > 0) cache.set(cacheKey, items, {ttl: SEARCH_CACHE_TTL});
   }
   return items;
 }
@@ -269,70 +274,89 @@ function normalizeHash(raw) {
  *
  * Os hashes são comparados com os torrents do Jackett para marcar como cached.
  */
+/**
+ * Faz uma requisição torznab e retorna os hashes encontrados.
+ * Tenta múltiplos formatos de query em paralelo e retorna a união.
+ */
+async function fetchTorznabHashes(client, paramsList) {
+  const t0 = Date.now();
+  const allHashes = new Set();
+
+  const fetches = paramsList.map(async (params) => {
+    if (client.apiKey) params.set('apikey', client.apiKey);
+    const url = `${client.url}?${params.toString()}`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        console.warn(`[TORZNAB:${client.sourceName.toUpperCase()}] HTTP ${res.status} | ${url}`);
+        return;
+      }
+      const text = await res.text();
+      const parser = new Parser({ explicitArray: false, ignoreAttrs: false });
+      const data = await parser.parseStringPromise(text).catch(() => null);
+      if (!data) return;
+
+      const rawItems = data?.rss?.channel?.item;
+      const itemList = rawItems ? (Array.isArray(rawItems) ? rawItems : [rawItems]) : [];
+
+      for (const raw of itemList) {
+        try {
+          const item = mergeDollarKeys(raw);
+          const attrRaw = item['torznab:attr'];
+          const attrs = {};
+          if (attrRaw) {
+            const attrList = Array.isArray(attrRaw) ? attrRaw : [attrRaw];
+            for (const a of attrList) {
+              const merged = mergeDollarKeys(a);
+              if (merged.name) attrs[merged.name] = merged.value;
+            }
+          }
+          let hash = normalizeHash(attrs.infohash || '');
+          if (!hash) hash = normalizeHash(extractHash(attrs.magneturl || item.link || ''));
+          if (hash) allHashes.add(hash);
+        } catch { /* ignorar item inválido */ }
+      }
+    } catch (e) {
+      console.error(`[TORZNAB:${client.sourceName.toUpperCase()}] fetch erro: ${e.message}`);
+    }
+  });
+
+  await Promise.all(fetches);
+  console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] ${Date.now()-t0}ms | hashes=${allHashes.size}`);
+  return [...allHashes];
+}
+
 export async function searchCacheSources({ q, imdbId }) {
   if (torznabClients.length === 0) return new Set();
 
   const results = await Promise.all(
     torznabClients.map(async (client) => {
       try {
-        const t0 = Date.now();
-        let url;
+        const paramsList = [];
 
-        // Zilean indexa por IMDB ID — muito mais eficaz que busca textual
-        if (client.sourceName === 'zilean' && imdbId) {
-          const params = new URLSearchParams({ t: 'movie', imdbid: imdbId.replace('tt', '') });
-          if (client.apiKey) params.set('apikey', client.apiKey);
-          url = `${client.url}?${params.toString()}`;
+        if (client.sourceName === 'zilean') {
+          // Zilean: tenta t=movie e t=search com imdbid
+          if (imdbId) {
+            paramsList.push(new URLSearchParams({ t: 'movie',  imdbid: imdbId.replace('tt', '') }));
+            paramsList.push(new URLSearchParams({ t: 'search', imdbid: imdbId.replace('tt', '') }));
+          }
+          if (q) paramsList.push(new URLSearchParams({ t: 'search', q }));
+
+        } else if (client.sourceName === 'stremthru') {
+          // StremThru: tenta imdbid (mais preciso) e texto como fallback
+          if (imdbId) {
+            paramsList.push(new URLSearchParams({ t: 'search', imdbid: imdbId.replace('tt', '') }));
+            paramsList.push(new URLSearchParams({ t: 'movie',  imdbid: imdbId.replace('tt', '') }));
+          }
+          if (q) paramsList.push(new URLSearchParams({ t: 'search', q }));
+
         } else {
-          const params = new URLSearchParams({ t: 'search', q: q || '' });
-          if (client.apiKey) params.set('apikey', client.apiKey);
-          url = `${client.url}?${params.toString()}`;
+          // Bitmagnet e outros: imdbid se disponível, fallback texto
+          if (imdbId) paramsList.push(new URLSearchParams({ t: 'search', imdbid: imdbId.replace('tt', '') }));
+          if (q)      paramsList.push(new URLSearchParams({ t: 'search', q }));
         }
 
-        const res = await fetch(url);
-        if (!res.ok) {
-          console.warn(`[TORZNAB:${client.sourceName.toUpperCase()}] HTTP ${res.status}`);
-          return [];
-        }
-
-        const text = await res.text();
-
-        let data;
-        try {
-          const parser = new Parser({ explicitArray: false, ignoreAttrs: false });
-          data = await parser.parseStringPromise(text);
-        } catch (parseErr) {
-          console.error(`[TORZNAB:${client.sourceName.toUpperCase()}] Erro parse XML: ${parseErr.message}`);
-          return [];
-        }
-
-        const rawItems = data?.rss?.channel?.item;
-        const itemList = rawItems ? (Array.isArray(rawItems) ? rawItems : [rawItems]) : [];
-
-        const hashes = itemList.map(raw => {
-          try {
-            const item = mergeDollarKeys(raw);
-            const attrRaw = item['torznab:attr'];
-            const attrs = {};
-            if (attrRaw) {
-              const attrList = Array.isArray(attrRaw) ? attrRaw : [attrRaw];
-              for (const a of attrList) {
-                const merged = mergeDollarKeys(a);
-                if (merged.name) attrs[merged.name] = merged.value;
-              }
-            }
-
-            let hash = normalizeHash(attrs.infohash || '');
-            if (!hash) {
-              const magnet = attrs.magneturl || item.link || '';
-              hash = normalizeHash(extractHash(magnet));
-            }
-            return hash || null;
-          } catch { return null; }
-        }).filter(Boolean);
-
-        console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] ${Date.now()-t0}ms | hashes=${hashes.length}${imdbId ? ` imdbid=${imdbId}` : ` q="${q}"`}`);
-        return hashes;
+        return await fetchTorznabHashes(client, paramsList);
       } catch (e) {
         console.error(`[TORZNAB:${client.sourceName.toUpperCase()}] Erro: ${e.message}`);
         return [];
@@ -340,8 +364,7 @@ export async function searchCacheSources({ q, imdbId }) {
     })
   );
 
-  const allHashes = new Set(results.flat());
-  return allHashes;
+  return new Set(results.flat());
 }
 
 // --- NORMALIZADORES E EXTRAÇÃO DE DETALHES ---
