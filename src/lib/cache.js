@@ -1,35 +1,53 @@
-import sqlite3 from 'sqlite3';
-import sqliteStore from 'cache-manager-sqlite';
-import cacheManager from 'cache-manager';
+import Redis from 'ioredis';
 import config from './config.js';
-import {wait} from './util.js';
 
-const db = new sqlite3.Database(`${config.dataFolder}/cache.db`);
+const redisUri = process.env.REDIS_URI || config.redisUri || 'redis://localhost:6379';
 
-const cache = await cacheManager.caching({
-  store: sqliteStore,
-  path: `${config.dataFolder}/cache.db`,
-  options: { ttl: 86400 }
+const client = new Redis(redisUri, {
+  retryStrategy: (times) => Math.min(times * 200, 5000),
+  enableOfflineQueue: false,
+  lazyConnect: false,
+  maxRetriesPerRequest: 1,
 });
 
-export default cache;
+client.on('connect',      () => console.log(`[Cache] Redis conectado: ${redisUri}`));
+client.on('error',        (err) => console.error(`[Cache] Redis erro: ${err.message}`));
+client.on('reconnecting', () => console.log('[Cache] Redis reconectando...'));
 
-export async function clean(){
-  // https://github.com/maxpert/node-cache-manager-sqlite/blob/36a1fe44a30b6af8d8c323c59e09fe81bde539d9/index.js#L146
-  // The cache will grow until an expired key is requested
-  // This hack should force node-cache-manager-sqlite to purge
-  await cache.set('_clean', 'todo', {ttl: 1});
-  await wait(3e3);
-  await cache.get('_clean');
+const DEFAULT_TTL = 86400; // 24h
+
+async function get(key) {
+  try {
+    const raw = await client.get(key);
+    if (raw === null) return null;
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error(`[Cache] get("${key}") erro: ${e.message}`);
+    return null;
+  }
 }
 
-export async function vacuum(){
-  return new Promise((resolve, reject) => {
-    db.serialize(() => {
-      db.run('VACUUM', err => {
-        if(err)return reject(err);
-        resolve();
-      })
-    });
-  });
+async function set(key, value, opts = {}) {
+  if (value === null || value === undefined) return;
+  if (Array.isArray(value) && value.length === 0) return;
+
+  const ttl = opts.ttl ?? DEFAULT_TTL;
+  try {
+    await client.set(key, JSON.stringify(value), 'EX', ttl);
+  } catch (e) {
+    console.error(`[Cache] set("${key}") erro: ${e.message}`);
+  }
 }
+
+async function del(key) {
+  try {
+    await client.del(key);
+  } catch (e) {
+    console.error(`[Cache] del("${key}") erro: ${e.message}`);
+  }
+}
+
+export default { get, set, del };
+
+export async function clean() {}
+export async function vacuum() {}
