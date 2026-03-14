@@ -9,19 +9,53 @@ export const CATEGORY = {
   SERIES: 5000
 };
 
-// --- CONFIGURAÇÃO MULTI-CLIENTE ---
+// --- CONFIGURAÇÃO MULTI-CLIENTE (Jackett / Prowlarr) ---
 const rawUrls = (process.env.JACKETT_URL || config.jackettUrl || 'http://jackett:9117').split(',');
 const rawKeys = (process.env.JACKETT_API_KEY || config.jackettApiKey || '').split(',');
 
-const clients = rawUrls.map((url, index) => ({
+const jackettClients = rawUrls.map((url, index) => ({
   id: index,
   url: url.trim().replace(/\/$/, ''),
   apiKey: (rawKeys[index] || rawKeys[0] || '').trim(),
-  type: 'unknown'
+  type: 'unknown',
+  sourceName: null,
+  isCache: false
 })).filter(c => c.url.startsWith('http'));
+
+// --- CLIENTES TORZNAB DIRETOS (StremThru, Bitmagnet, Zilean) ---
+// Fontes marcadas como isCache=true têm seus resultados tratados como já cacheados no debrid.
+// StremThru e Zilean indexam conteúdo de caches de debrid, portanto isCached=true por padrão.
+// Bitmagnet é um indexador geral (P2P), tratado como não-cacheado normalmente.
+const TORZNAB_SOURCES = [
+  { name: 'stremthru', urlKey: 'STREMTHRU_URL', keyKey: 'STREMTHRU_API_KEY', isCache: true  },
+  { name: 'bitmagnet', urlKey: 'BITMAGNET_URL',  keyKey: 'BITMAGNET_API_KEY', isCache: false },
+  { name: 'zilean',    urlKey: 'ZILEAN_URL',      keyKey: 'ZILEAN_API_KEY',    isCache: true  },
+];
+
+const torznabClients = [];
+let _torznabIdStart = jackettClients.length;
+
+TORZNAB_SOURCES.forEach(({ name, urlKey, keyKey, isCache }) => {
+  const url = (process.env[urlKey] || config[`${name}Url`] || '').trim();
+  if (url && url.startsWith('http')) {
+    torznabClients.push({
+      id: _torznabIdStart++,
+      url: url.replace(/\/$/, ''),
+      apiKey: (process.env[keyKey] || config[`${name}ApiKey`] || '').trim(),
+      type: 'torznab',
+      sourceName: name,
+      isCache
+    });
+    console.log(`[TORZNAB] Fonte registrada: ${name} → ${url} (isCache=${isCache})`);
+  }
+});
+
+// Lista unificada de todos os clientes
+const clients = [...jackettClients, ...torznabClients];
 
 // --- DETECÇÃO ---
 async function detectClientType(client) {
+  // Clientes torznab já têm o tipo definido na inicialização
   if (client.type !== 'unknown') return client.type;
   try {
     const url = `${client.url}/api/v2.0/indexers/all/results/torznab/t?apikey=${client.apiKey}&t=indexers&configured=true`;
@@ -137,6 +171,58 @@ async function searchAllClients(query) {
 
             return items;
         }
+
+      } else if (type === 'torznab') {
+        // --- Clientes Torznab diretos: StremThru, Bitmagnet, Zilean ---
+        if (query.t === 'indexers') {
+          // Retorna um indexador sintético representando toda a fonte
+          const label = client.sourceName.charAt(0).toUpperCase() + client.sourceName.slice(1);
+          return [{
+            id: `${client.id}:${client.sourceName}`,
+            configured: true,
+            title: label,
+            language: 'en-US',
+            type: 'public',
+            categories: [CATEGORY.MOVIE, CATEGORY.SERIES],
+            sourceName: client.sourceName,
+            isCache: client.isCache,
+            searching: {
+              movie:  { available: true, supportedParams: ['q'] },
+              series: { available: true, supportedParams: ['q'] }
+            }
+          }];
+        }
+
+        // Busca Torznab padrão
+        const params = new URLSearchParams({ t: 'search', cat: query.cat || '', q: query.q || '' });
+        if (client.apiKey) params.set('apikey', client.apiKey);
+
+        const url = `${client.url}?${params.toString()}`;
+        const t0 = Date.now();
+        const res = await fetch(url);
+
+        if (!res.ok) {
+          console.warn(`[TORZNAB:${client.sourceName.toUpperCase()}] HTTP ${res.status} para q="${query.q || ''}"`);
+          return [];
+        }
+
+        const text = await res.text();
+        const parser = new Parser({ explicitArray: false, ignoreAttrs: false });
+        const data = await parser.parseStringPromise(text);
+
+        const rawItems = normalizeItems(data?.rss?.channel?.item || [], client.id);
+        // Sobrescreve indexerId/indexerName com o nome da fonte e propaga flag isCache
+        const items = rawItems.map(item => ({
+          ...item,
+          indexerId:         client.sourceName,
+          indexerName:       client.sourceName,
+          isFromCacheSource: client.isCache,
+        }));
+
+        const elapsed = Date.now() - t0;
+        console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] ${elapsed}ms | total=${items.length} | q="${query.q || ''}" | isCache=${client.isCache}`);
+
+        return items;
       }
     } catch (e) { return []; }
   });

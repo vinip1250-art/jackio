@@ -7,6 +7,21 @@ export default {
   jackettUrl: process.env.JACKETT_URL || 'http://localhost:9117',
   // Jacket API key
   jackettApiKey: process.env.JACKETT_API_KEY || '',
+  // StremThru Torznab endpoint URL (e.g. https://stremthru.example.com/v0/torznab/api)
+  // Results from StremThru are treated as cached (debrid-backed content)
+  stremthruUrl: process.env.STREMTHRU_URL || '',
+  // StremThru API key (if required by your instance)
+  stremthruApiKey: process.env.STREMTHRU_API_KEY || '',
+  // Bitmagnet Torznab endpoint URL (e.g. https://bitmagnet.example.com/torznab/api)
+  // Results from Bitmagnet are treated as regular uncached torrents
+  bitmagnetUrl: process.env.BITMAGNET_URL || '',
+  // Bitmagnet API key (if required by your instance)
+  bitmagnetApiKey: process.env.BITMAGNET_API_KEY || '',
+  // Zilean Torznab endpoint URL (e.g. https://zilean.example.com/torznab/api)
+  // Results from Zilean are treated as cached (debrid cache database)
+  zileanUrl: process.env.ZILEAN_URL || '',
+  // Zilean API key (if required by your instance)
+  zileanApiKey: process.env.ZILEAN_API_KEY || '',
   //  The Movie Database Access Token. Configure to use TMDB rather than cinemeta.
   tmdbAccessToken: process.env.TMDB_ACCESS_TOKEN || '', 
   // Data folder for cache database, torrent files ... Must be persistent in production

@@ -343,9 +343,26 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       const torrentsWithHash = torrents.filter(t => t.infos?.infoHash);
       console.log(`[DEBUG] enviando para cache check: ${torrentsWithHash.length} (${torrents.length - torrentsWithHash.length} sem hash ignorados)`);
 
+      // Separa torrents de fontes de cache (StremThru, Zilean) dos demais.
+      // Fontes de cache indexam conteúdo que já está disponível em debrids,
+      // então seus resultados são marcados como cached diretamente, sem precisar
+      // consultar o debrid (o que economiza tempo e evita limitações de rate-limit).
+      const preCachedTorrents = torrentsWithHash.filter(t => t.isFromCacheSource);
+      const regularTorrents   = torrentsWithHash.filter(t => !t.isFromCacheSource);
+
+      console.log(`[DEBUG] pré-cacheados (StremThru/Zilean): ${preCachedTorrents.length} | verificação debrid: ${regularTorrents.length}`);
+
       const t0Debrid = Date.now();
-      const cached = (await debridInstance.getTorrentsCached(torrentsWithHash)).map(t => ({ ...t, isCached: true }));
-      console.log(`[DEBUG] cache check em ${Date.now()-t0Debrid}ms → cached: ${cached.length}`);
+      const cachedFromDebrid = regularTorrents.length > 0
+        ? (await debridInstance.getTorrentsCached(regularTorrents)).map(t => ({ ...t, isCached: true }))
+        : [];
+      console.log(`[DEBUG] cache check debrid em ${Date.now()-t0Debrid}ms → cached: ${cachedFromDebrid.length}`);
+
+      // Torrents de fontes de cache são automaticamente marcados como isCached
+      const cachedFromSources = preCachedTorrents.map(t => ({ ...t, isCached: true }));
+
+      const cached = [...cachedFromDebrid, ...cachedFromSources];
+      console.log(`[DEBUG] total cached: ${cached.length} (debrid=${cachedFromDebrid.length} + fontes=${cachedFromSources.length})`);
 
       let uncached = torrents.filter(t => {
         const isCached = cached.find(c => c.id === t.id || c.id === `rd:${t.id}` || c.id === `tb:${t.id}`);
