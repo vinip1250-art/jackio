@@ -230,31 +230,76 @@ export async function getIndexers(){
 }
 
 /**
- * Busca nas fontes torznab (StremThru, Zilean, Bitmagnet) pelo título
- * e retorna um Set com todos os infoHashes encontrados.
- *
- * Esses hashes são comparados com os torrents vindos do Jackett para
- * determinar quais já estão cacheados no debrid — sem precisar chamar
- * a API do debrid para cada um.
+ * Converte hash base32 (btih) para hex se necessário.
+ * Torznab alguns endpoints retornam o hash em base32 (ex: Zilean).
  */
-export async function searchCacheSources({ q }) {
+function base32ToHex(base32) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const c of base32.toUpperCase()) {
+    const v = alphabet.indexOf(c);
+    if (v < 0) return null;
+    bits += v.toString(2).padStart(5, '0');
+  }
+  // Pega apenas os primeiros 160 bits (40 hex chars = SHA1)
+  let hex = '';
+  for (let i = 0; i + 4 <= 160 && i + 4 <= bits.length; i += 4) {
+    hex += parseInt(bits.slice(i, i + 4), 2).toString(16);
+  }
+  return hex.length === 40 ? hex : null;
+}
+
+function normalizeHash(raw) {
+  if (!raw) return null;
+  const s = raw.trim().toLowerCase();
+  // Hex SHA1 (40 chars)
+  if (/^[0-9a-f]{40}$/.test(s)) return s;
+  // Base32 SHA1 (32 chars uppercase)
+  if (/^[a-z2-7]{32}$/.test(s)) return base32ToHex(s) || null;
+  return null;
+}
+
+/**
+ * Busca nas fontes torznab (StremThru, Zilean, Bitmagnet) e retorna
+ * um Set com todos os infoHashes encontrados (normalizados para hex).
+ *
+ * Estratégia por fonte:
+ * - Zilean: usa imdbid se disponível (muito mais preciso que busca por texto)
+ * - StremThru/Bitmagnet: usa busca por texto
+ *
+ * Os hashes são comparados com os torrents do Jackett para marcar como cached.
+ */
+export async function searchCacheSources({ q, imdbId }) {
   if (torznabClients.length === 0) return new Set();
 
   const results = await Promise.all(
     torznabClients.map(async (client) => {
       try {
-        const params = new URLSearchParams({ t: 'search', q });
-        if (client.apiKey) params.set('apikey', client.apiKey);
-        const url = `${client.url}?${params.toString()}`;
         const t0 = Date.now();
+        let url;
+
+        // Zilean indexa por IMDB ID — muito mais eficaz que busca textual
+        if (client.sourceName === 'zilean' && imdbId) {
+          const params = new URLSearchParams({ t: 'movie', imdbid: imdbId.replace('tt', '') });
+          if (client.apiKey) params.set('apikey', client.apiKey);
+          url = `${client.url}?${params.toString()}`;
+          console.log(`[TORZNAB:ZILEAN] buscando por imdbid=${imdbId} | url=${url}`);
+        } else {
+          const params = new URLSearchParams({ t: 'search', q: q || '' });
+          if (client.apiKey) params.set('apikey', client.apiKey);
+          url = `${client.url}?${params.toString()}`;
+          console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] buscando por q="${q}" | url=${url}`);
+        }
 
         const res = await fetch(url);
         if (!res.ok) {
-          console.warn(`[TORZNAB:${client.sourceName.toUpperCase()}] HTTP ${res.status} | q="${q}"`);
+          console.warn(`[TORZNAB:${client.sourceName.toUpperCase()}] HTTP ${res.status}`);
           return [];
         }
 
         const text = await res.text();
+        console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] RAW (300): ${text.slice(0, 300)}`);
+
         let data;
         try {
           const parser = new Parser({ explicitArray: false, ignoreAttrs: false });
@@ -266,6 +311,7 @@ export async function searchCacheSources({ q }) {
 
         const rawItems = data?.rss?.channel?.item;
         const itemList = rawItems ? (Array.isArray(rawItems) ? rawItems : [rawItems]) : [];
+        console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] itens: ${itemList.length}`);
 
         const hashes = itemList.map(raw => {
           try {
@@ -279,14 +325,23 @@ export async function searchCacheSources({ q }) {
                 if (merged.name) attrs[merged.name] = merged.value;
               }
             }
-            let hash = (attrs.infohash || '').toLowerCase();
-            const magnet = attrs.magneturl || item.link || '';
-            if (!hash && magnet) hash = extractHash(magnet);
+
+            // Tenta obter hash de infohash, magnet ou link
+            let hash = normalizeHash(attrs.infohash || '');
+            if (!hash) {
+              const magnet = attrs.magneturl || item.link || '';
+              const extracted = extractHash(magnet);
+              hash = normalizeHash(extracted);
+            }
+
+            if (hash) {
+              console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] hash encontrado: ${hash} | "${(item.title || '').slice(0, 60)}"`);
+            }
             return hash || null;
           } catch { return null; }
         }).filter(Boolean);
 
-        console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] ${Date.now()-t0}ms | hashes=${hashes.length} | q="${q}"`);
+        console.log(`[TORZNAB:${client.sourceName.toUpperCase()}] ${Date.now()-t0}ms | ${hashes.length} hashes válidos`);
         return hashes;
       } catch (e) {
         console.error(`[TORZNAB:${client.sourceName.toUpperCase()}] Erro: ${e.message}`);
