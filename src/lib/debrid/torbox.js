@@ -35,8 +35,14 @@ export default class Torbox {
             const match = magnet.match(/xt=urn:btih:([a-zA-Z0-9]+)/i);
             if (match) hash = match[1];
         }
-        return { hash, magnet, original: t };
-    }).filter(i => i.hash);
+
+        // Torrents privados não devem ser enviados ao checkcached:
+        // a API do TorBox pode adicioná-los automaticamente à conta
+        // ao processar o cache check, causando downloads indesejados.
+        const isPrivate = t.infos?.private || t.private || false;
+
+        return { hash, magnet, original: t, isPrivate };
+    }).filter(i => i.hash && !i.isPrivate);
 
     if (items.length === 0) return [];
 
@@ -50,7 +56,7 @@ export default class Torbox {
       
       try {
         const data = await this.#request('GET', '/torrents/checkcached', {
-          query: { hash: hashString, format: 'list' }
+          query: { hash: hashString, format: 'list', list_files: 'false' }
         });
         
         if (data && data.data) {
