@@ -343,10 +343,12 @@ export async function searchCacheSources({ q, imdbId }) {
           if (q) paramsList.push(new URLSearchParams({ t: 'search', q }));
 
         } else if (client.sourceName === 'stremthru') {
-          // StremThru: tenta imdbid (mais preciso) e texto como fallback
+          // StremThru caps: movie-search suporta imdbid (t=movie),
+          // tv-search suporta imdbid (t=tvsearch), search só suporta q.
           if (imdbId) {
-            paramsList.push(new URLSearchParams({ t: 'search', imdbid: imdbId.replace('tt', '') }));
-            paramsList.push(new URLSearchParams({ t: 'movie',  imdbid: imdbId.replace('tt', '') }));
+            // Tenta movie-search e tvsearch — um deles vai bater dependendo do tipo
+            paramsList.push(new URLSearchParams({ t: 'movie',    imdbid: imdbId.replace('tt', ''), cat: '2000' }));
+            paramsList.push(new URLSearchParams({ t: 'tvsearch', imdbid: imdbId.replace('tt', ''), cat: '5000' }));
           }
           if (q) paramsList.push(new URLSearchParams({ t: 'search', q }));
 
