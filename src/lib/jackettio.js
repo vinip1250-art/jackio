@@ -358,19 +358,13 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       });
 
       if (debridInstance.constructor.id === 'hybrid') {
-        const rdUncached = uncached.map(t => ({
-          ...t,
-          id: `rd:${t.id}`,
-          shortName: 'RD',
-          name: `[RD] ${t.name}`
-        }));
-        const tbUncached = uncached.map(t => ({
-          ...t,
-          id: `tb:${t.id}`,
-          shortName: 'TB',
-          name: `[TB] ${t.name}`
-        }));
+        const rdUncached = uncached.map(t => ({ ...t, id: `rd:${t.id}`, shortName: 'RD', name: `[RD] ${t.name}` }));
+        const tbUncached = uncached.map(t => ({ ...t, id: `tb:${t.id}`, shortName: 'TB', name: `[TB] ${t.name}` }));
         uncached = [...rdUncached, ...tbUncached];
+      } else if (debridInstance.constructor.id === 'hybridoc') {
+        const tbUncached = uncached.map(t => ({ ...t, id: `tb:${t.id}`, shortName: 'TB', name: `[TB] ${t.name}` }));
+        const ocUncached = uncached.map(t => ({ ...t, id: `oc:${t.id}`, shortName: 'OC', name: `[OC] ${t.name}` }));
+        uncached = [...tbUncached, ...ocUncached];
       }
 
       if (hideUncached) uncached = [];
@@ -449,7 +443,8 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
 
   // === LÓGICA DE ROTEAMENTO E UPLOAD DE .TORRENT ===
   let files;
-  const isHybrid = debridInstance.constructor.id === 'hybrid';
+  const isHybrid   = debridInstance.constructor.id === 'hybrid';
+  const isHybridOC = debridInstance.constructor.id === 'hybridoc';
 
   /**
    * Tenta obter os arquivos do torrent para um serviço debrid.
@@ -534,6 +529,14 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
   else if (isHybrid && torrentId.startsWith('rd:')) {
     files = await getFilesForService(debridInstance.rd);
     files = files.map(f => ({...f, id: `rd:${f.id}`}));
+  }
+  else if (isHybridOC && torrentId.startsWith('tb:')) {
+    files = await getFilesForService(debridInstance.tb);
+    files = files.map(f => ({...f, id: `tb:${f.id}`}));
+  }
+  else if (isHybridOC && torrentId.startsWith('oc:')) {
+    files = await getFilesForService(debridInstance.oc);
+    files = files.map(f => ({...f, id: `oc:${f.id}`}));
   }
   else {
     files = await getFilesForService(debridInstance);
