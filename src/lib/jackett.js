@@ -133,44 +133,43 @@ async function searchAllClients(query) {
 
     try {
       if (type === 'jackett') {
-        const params = new URLSearchParams({
-           apikey: client.apiKey,
-           t: query.t,
-           cat: query.cat || '',
-           q: query.q || ''
-        });
-        const apiPath = specificIndexerId === 'all' 
-            ? '/api/v2.0/indexers/all/results/torznab/api' 
-            : `/api/v2.0/indexers/${specificIndexerId}/results/torznab/api`;
-        const url = `${client.url}${apiPath}?${params.toString()}`;
-        
-        const t0 = Date.now();
-        let data;
-        const res = await fetch(url);
-        if(res.headers.get('content-type')?.includes('application/json')){
-          data = await res.json();
-        } else {
-          const text = await res.text();
-          const parser = new Parser({explicitArray: false, ignoreAttrs: false});
-          data = await parser.parseStringPromise(text);
-        }
+        // Bug fix: Jackett nao suporta multiplos indexadores no path (ex: "animez+nyaasi").
+        // Quando ha multiplos IDs separados por "+", fazemos chamadas individuais em paralelo.
+        const indexerIds = specificIndexerId === 'all'
+          ? ['all']
+          : specificIndexerId.split('+').map(s => s.trim()).filter(Boolean);
 
-        if (query.t === 'indexers') return normalizeIndexers(data?.indexers?.indexer || [], client.id);
-        const items = normalizeItems(data?.rss?.channel?.item || [], client.id);
-
-        // Log de timing e resultado por indexador
-        if (query.t !== 'indexers') {
+        const fetchOne = async (indexerId) => {
+          const params = new URLSearchParams({
+            apikey: client.apiKey,
+            t: query.t,
+            cat: query.cat || '',
+            q: query.q || ''
+          });
+          const apiPath = indexerId === 'all'
+            ? '/api/v2.0/indexers/all/results/torznab/api'
+            : `/api/v2.0/indexers/${indexerId}/results/torznab/api`;
+          const url = `${client.url}${apiPath}?${params.toString()}`;
+          const t0 = Date.now();
+          const res = await fetch(url);
+          let data;
+          if (res.headers.get('content-type')?.includes('application/json')) {
+            data = await res.json();
+          } else {
+            const text = await res.text();
+            const parser = new Parser({ explicitArray: false, ignoreAttrs: false });
+            data = await parser.parseStringPromise(text);
+          }
+          if (query.t === 'indexers') return normalizeIndexers(data?.indexers?.indexer || [], client.id);
+          const items = normalizeItems(data?.rss?.channel?.item || [], client.id);
           const elapsed = Date.now() - t0;
-          const byIndexer = items.reduce((acc, i) => {
-            const name = i.indexerId || 'unknown';
-            acc[name] = (acc[name] || 0) + 1;
-            return acc;
-          }, {});
-          const indexerSummary = Object.entries(byIndexer).map(([k, v]) => `${k}:${v}`).join(', ');
-          console.log(`[JACKETT] client=${client.id} | ${elapsed}ms | total=${items.length} | q="${query.q || ''}" | ${indexerSummary || 'sem resultados'}`);
-        }
+          const byIndexer = items.reduce((acc, i) => { acc[i.indexerId || 'unknown'] = (acc[i.indexerId || 'unknown'] || 0) + 1; return acc; }, {});
+          console.log(`[JACKETT] client=${client.id} indexer=${indexerId} | ${elapsed}ms | total=${items.length} | q="${query.q || ''}" | ${Object.entries(byIndexer).map(([k,v]) => k+':'+v).join(', ') || 'sem resultados'}`);
+          return items;
+        };
 
-        return items;
+        const results = await Promise.all(indexerIds.map(id => fetchOne(id).catch(() => [])));
+        return results.flat();
 
       } else if (type === 'prowlarr') {
         if (query.t === 'indexers') {
@@ -531,7 +530,7 @@ function normalizeItems(items, clientId){
       seeders: parseInt(attr.seeders || 0),
       peers: parseInt(attr.peers || 0),
       infoHash: infoHash,
-      magneturl: magnet, 
+      magnetUrl: magnet,
       type: item.type,
       quality: quality ? parseInt(quality[1]) : 0,
       year: year ? parseInt(year.pop()) : 0,
@@ -581,8 +580,8 @@ function normalizeProwlarrItems(items){
       seeders: item.seeders || 0,
       peers: item.leechers || 0,
       infoHash: infoHash,
-      magneturl: item.magnetUrl || item.downloadUrl || '', 
-      type: 'movie', 
+      magnetUrl: item.magnetUrl || item.downloadUrl || '',
+      type: (item.categories || []).some(c => c >= 5000 && c < 6000) ? 'tv' : 'movie',
       quality: quality ? parseInt(quality[1]) : 0,
       year: year ? parseInt(year.pop()) : 0,
       languages: config.languages.filter(lang => title.match(lang.pattern)),
