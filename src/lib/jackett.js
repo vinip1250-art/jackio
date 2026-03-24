@@ -122,7 +122,7 @@ async function searchAllClients(query) {
   if (specificIndexerId !== 'all' && specificIndexerId.includes(':')) {
     const parts = specificIndexerId.split(':');
     const cId = parseInt(parts[0]);
-    specificIndexerId = parts.slice(1).join(':'); 
+    specificIndexerId = parts.slice(1).join(':');
     targetClients = jackettClients.filter(c => c.id === cId);
     console.log(`[SEARCH] filtrado para client=${cId} indexer=${specificIndexerId} (${targetClients.length} cliente)`);
   }
@@ -188,8 +188,8 @@ async function searchAllClients(query) {
                 const q = query.q || '';
                 const sMatch = q.match(/S(\d+)/i);
                 const eMatch = q.match(/E(\d+)/i);
-                if (sMatch) params.append('seasonNumber', parseInt(sMatch[1]));
-                if (eMatch) params.append('episodeNumber', parseInt(eMatch[1]));
+                if (sMatch) params.append('season', parseInt(sMatch[1]));
+                if (eMatch) params.append('ep', parseInt(eMatch[1]));
             } else {
                 params.append('type', 'search');
             }
@@ -198,11 +198,17 @@ async function searchAllClients(query) {
             cleanQuery = cleanQuery.replace(/S\d+E\d+/i, '').replace(/S\d+/i, '').trim();
             if (cleanQuery) params.append('query', cleanQuery);
 
-            if (specificIndexerId !== 'all') params.append('indexerIds', specificIndexerId);
+            // Suporte a batch: specificIndexerId pode ser "5+7+12" para múltiplos IDs
+            if (specificIndexerId !== 'all') {
+              const idList = specificIndexerId.split('+').map(s => s.trim()).filter(Boolean);
+              for (const id of idList) params.append('indexerIds', id);
+            }
 
             const url = `${client.url}/api/v1/search?${params.toString()}`;
             const t0 = Date.now();
-            const json = await (await fetch(url)).json();
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`Prowlarr HTTP ${res.status}`);
+            const json = await res.json();
             const items = normalizeProwlarrItems(json);
 
             const elapsed = Date.now() - t0;
@@ -273,10 +279,43 @@ export async function searchEpisodeTorrents({indexer, name, year, season, episod
   return items;
 }
 
+/**
+ * Busca em batch: agrupa todos os indexadores selecionados de um cliente
+ * em UMA única requisição, em vez de N chamadas (uma por indexador).
+ * Reduz 12 chamadas ao Prowlarr para 1.
+ */
+export async function searchBatchTorrents({ clientId, indexerIds, q, cat }) {
+  // indexerIds é array de IDs do cliente (ex: ["5","7","12"])
+  // Codifica como "clientId:id1+id2+id3" para searchAllClients rotear corretamente
+  const indexer = `${clientId}:${indexerIds.join('+')}`;
+  const sortedKey = [...indexerIds].sort().join('+');
+  const cacheKey = `jackettBatch:3:${cat}:${clientId}:${sortedKey}:${q}`;
+  let items = await cache.get(cacheKey);
+  if (!items) {
+    items = await searchAllClients({ t: 'search', cat, q, indexer });
+    if (items.length > 0) cache.set(cacheKey, items, { ttl: SEARCH_CACHE_TTL });
+  }
+  return items;
+}
+
 // Retorna apenas indexadores Jackett/Prowlarr — fontes torznab são usadas
 // exclusivamente como verificadores de cache em searchCacheSources().
+const INDEXERS_CACHE_TTL = 60 * 5; // 5 minutos
+
 export async function getIndexers(){
-  return searchAllClients({t: 'indexers', configured: 'true'});
+  const cacheKey = `jackettIndexers:${jackettClients.map(c => `${c.id}:${c.apiKey.slice(0,8)}`).join(',')}`;
+  let indexers = await cache.get(cacheKey);
+  if (!indexers) {
+    indexers = await searchAllClients({t: 'indexers', configured: 'true'});
+    if (indexers.length > 0) cache.set(cacheKey, indexers, {ttl: INDEXERS_CACHE_TTL});
+  }
+  return indexers;
+}
+
+export function invalidateIndexersCache(){
+  // Chame isso se o usuário mudar os indexadores configurados
+  const cacheKey = `jackettIndexers:${jackettClients.map(c => `${c.id}:${c.apiKey.slice(0,8)}`).join(',')}`;
+  cache.delete?.(cacheKey);
 }
 
 /**
