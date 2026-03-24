@@ -504,10 +504,9 @@ function normalizeItems(items, clientId){
 
 function normalizeIndexers(items, clientId){
   return forceArray(items)
-    .map(item => mergeDollarKeys(item))                 // mescla atributos primeiro
-    .filter(item => item.configured === 'true' || ...)  // agora item.configured existe
-    .map(item => { ... })                               // item já está limpo
-      item = mergeDollarKeys(item);
+    .map(item => mergeDollarKeys(item))
+    .filter(item => item.configured === 'true' || item.configured === true)
+    .map(item => {
       const searching = item.caps.searching;
       return {
         id: `${clientId}:${item.id}`,
