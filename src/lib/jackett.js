@@ -22,6 +22,12 @@ const jackettClients = rawUrls.map((url, index) => ({
   isCache: false
 })).filter(c => c.url.startsWith('http'));
 
+console.log(`[JACKETT/PROWLARR] ${jackettClients.length} cliente(s) registrado(s):`);
+jackettClients.forEach(c => {
+  const keyPreview = c.apiKey ? c.apiKey.slice(0, 8) + '...' : '(vazio)';
+  console.log(`  [client ${c.id}] url=${c.url} | apiKey=${keyPreview}`);
+});
+
 // --- CLIENTES TORZNAB DIRETOS (StremThru, Bitmagnet, Zilean) ---
 // Fontes marcadas como isCache=true têm seus resultados tratados como já cacheados no debrid.
 // StremThru e Zilean indexam conteúdo de caches de debrid, portanto isCached=true por padrão.
@@ -56,17 +62,53 @@ const clients = [...jackettClients, ...torznabClients];
 // --- DETECÇÃO ---
 async function detectClientType(client) {
   // Clientes torznab já têm o tipo definido na inicialização
-  if (client.type !== 'unknown') return client.type;
+  if (client.type !== 'unknown') {
+    console.log(`[DETECT] client=${client.id} (${client.url}) → tipo já conhecido: ${client.type}`);
+    return client.type;
+  }
+
+  console.log(`[DETECT] client=${client.id} (${client.url}) → iniciando detecção...`);
+
+  // Tenta Jackett
   try {
     const url = `${client.url}/api/v2.0/indexers/all/results/torznab/api?apikey=${client.apiKey}&t=indexers&configured=true`;
-    const res = await fetch(url);
-    if (res.ok && (await res.text()).includes('<indexers>')) return client.type = 'jackett';
-  } catch (e) {}
+    console.log(`[DETECT] client=${client.id} → testando Jackett: GET ${url}`);
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    console.log(`[DETECT] client=${client.id} → Jackett HTTP ${res.status} ${res.statusText}`);
+    if (res.ok) {
+      const text = await res.text();
+      const hasIndexers = text.includes('<indexers>');
+      console.log(`[DETECT] client=${client.id} → body snippet: ${text.slice(0, 120).replace(/\n/g, ' ')}`);
+      console.log(`[DETECT] client=${client.id} → contém <indexers>: ${hasIndexers}`);
+      if (hasIndexers) {
+        console.log(`[DETECT] client=${client.id} (${client.url}) → identificado como JACKETT ✅`);
+        return client.type = 'jackett';
+      }
+    }
+  } catch (e) {
+    console.log(`[DETECT] client=${client.id} → erro ao testar Jackett: ${e.message}`);
+  }
+
+  // Tenta Prowlarr
   try {
     const url = `${client.url}/api/v1/indexer?apikey=${client.apiKey}`;
-    const res = await fetch(url);
-    if (res.ok && Array.isArray(await res.json())) return client.type = 'prowlarr';
-  } catch (e) {}
+    console.log(`[DETECT] client=${client.id} → testando Prowlarr: GET ${url}`);
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    console.log(`[DETECT] client=${client.id} → Prowlarr HTTP ${res.status} ${res.statusText}`);
+    if (res.ok) {
+      const json = await res.json();
+      const isArray = Array.isArray(json);
+      console.log(`[DETECT] client=${client.id} → resposta é array: ${isArray} | length=${isArray ? json.length : 'n/a'}`);
+      if (isArray) {
+        console.log(`[DETECT] client=${client.id} (${client.url}) → identificado como PROWLARR ✅`);
+        return client.type = 'prowlarr';
+      }
+    }
+  } catch (e) {
+    console.log(`[DETECT] client=${client.id} → erro ao testar Prowlarr: ${e.message}`);
+  }
+
+  console.warn(`[DETECT] client=${client.id} (${client.url}) → NÃO identificado ❌ (type=error)`);
   return client.type = 'error';
 }
 
@@ -75,11 +117,14 @@ async function searchAllClients(query) {
   let targetClients = jackettClients;
   let specificIndexerId = query.indexer || 'all';
 
+  console.log(`[SEARCH] t=${query.t} | indexer=${specificIndexerId} | q="${query.q || ''}" | clients disponíveis: ${jackettClients.length}`);
+
   if (specificIndexerId !== 'all' && specificIndexerId.includes(':')) {
     const parts = specificIndexerId.split(':');
     const cId = parseInt(parts[0]);
     specificIndexerId = parts.slice(1).join(':'); 
     targetClients = jackettClients.filter(c => c.id === cId);
+    console.log(`[SEARCH] filtrado para client=${cId} indexer=${specificIndexerId} (${targetClients.length} cliente)`);
   }
 
   const promises = targetClients.map(async (client) => {
