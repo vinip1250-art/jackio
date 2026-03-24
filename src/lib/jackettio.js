@@ -272,33 +272,38 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
 
     console.log(`[${stremioId}] type=${type} indexers=${indexers.length} name="${metaInfos.name}"${episode ? ` ep=S${String(season).padStart(2,'0')}E${String(episode).padStart(2,'0')}` : ''}`);
 
+    // Agrupa indexadores por cliente → 1 chamada por cliente em vez de 1 por indexador.
+    // Com 12 indexadores no Prowlarr: 12 chamadas → 1 chamada.
+    const byClient = new Map();
+    for (const idx of indexers) {
+      const colonIdx = idx.id.indexOf(':');
+      const clientId = parseInt(idx.id.slice(0, colonIdx));
+      const idxId = idx.id.slice(colonIdx + 1);
+      if (!byClient.has(clientId)) byClient.set(clientId, []);
+      byClient.get(clientId).push(idxId);
+    }
+
+    const buildBatchSearches = (cat, q) =>
+      [...byClient.entries()].map(([clientId, idxIds]) =>
+        promiseTimeout(
+          jackett.searchBatchTorrents({ clientId, indexerIds: idxIds, q, cat }),
+          indexerTimeoutSec * 1000
+        ).catch(() => [])
+      );
+
     let torrents = [];
 
     if (searchType === 'movie') {
       torrents = (await Promise.all(
-        indexers.map(i =>
-          promiseTimeout(
-            jackett.searchMovieTorrents({ ...metaInfos, indexer: i.id }),
-            indexerTimeoutSec * 1000
-          ).catch(() => [])
-        )
+        buildBatchSearches(jackett.CATEGORY.MOVIE, metaInfos.name)
       )).flat();
     } else {
-      const searches = isAnime
-        ? indexers.map(i =>
-            promiseTimeout(
-              jackett.searchSerieTorrents({ ...metaInfos, indexer: i.id }),
-              indexerTimeoutSec * 1000
-            ).catch(() => [])
-          )
-        : indexers.map(i =>
-            promiseTimeout(
-              jackett.searchEpisodeTorrents({ ...metaInfos, indexer: i.id }),
-              indexerTimeoutSec * 1000
-            ).catch(() => [])
-          );
-
-      torrents = (await Promise.all(searches)).flat();
+      const q = isAnime
+        ? metaInfos.name
+        : `${metaInfos.name} S${numberPad(season)}E${numberPad(episode)}`;
+      torrents = (await Promise.all(
+        buildBatchSearches(jackett.CATEGORY.SERIES, q)
+      )).flat();
     }
 
     torrents = torrents
