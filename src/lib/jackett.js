@@ -58,7 +58,7 @@ async function detectClientType(client) {
   // Clientes torznab já têm o tipo definido na inicialização
   if (client.type !== 'unknown') return client.type;
   try {
-    const url = `${client.url}/api/v2.0/indexers/all/results/torznab/t?apikey=${client.apiKey}&t=indexers&configured=true`;
+    const url = `${client.url}/api/v2.0/indexers/all/results/torznab/api?apikey=${client.apiKey}&t=indexers&configured=true`;
     const res = await fetch(url);
     if (res.ok && (await res.text()).includes('<indexers>')) return client.type = 'jackett';
   } catch (e) {}
