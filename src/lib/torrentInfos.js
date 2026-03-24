@@ -35,12 +35,13 @@ export async function get({link, id, magnetUrl, infoHash, name, size, type}){
   let parseInfos = null;
   let torrentLocation = '';
 
-  if(magnetUrl && infoHash && name && size > 0 && type){
-
+  if(magnetUrl && infoHash && name && type && (size > 0 || magnetUrl.startsWith('magnet:'))){
+    // Fast path: dados suficientes para construir torrentInfos sem download.
+    // Aceita size=0 quando temos magnet (hash já garantido pelo link).
     parseInfos = {
       infoHash, 
       name, 
-      length: size, 
+      length: size > 0 ? size : -1, 
       private: (type == 'private')
     };
 
