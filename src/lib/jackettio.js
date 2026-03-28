@@ -15,21 +15,25 @@ const PTBR_KEYWORDS = [
   'pt-br', 'ptbr', 'portugues', 'dual-sigma',
   'brazilian', 'brasil', 'dual-cza', 'dual-xor',
   'dublado', 'nacional', 'por-br', 'dual-c.a.a',
-  'multi-audio', 'multi audio', 'dual audio', 
+  'multi-audio', 'multi audio',
   'dual-bioma', 'dual-c76', 'andrehsa',
-  'c0ral', 'cbr', 'brremux', 'sigla', 
-  'brremux', 'arcanjo', 'dual-nogroup'
+  'c0ral', 'cbr', 'brremux', 'sigla',
+  'arcanjo', 'dual-nogroup'
 ];
 
-// Keywords específicas para animes dublados em PT-BR
-const ANIME_DUBBED_KEYWORDS = [
-  'dublado', 'multi-audio', 'multi audio',
-  'pt-br', 'ptbr', 'brazilian'
-  ,
+// 'dual audio' sem qualificador = EN+JA (não inclui PT-BR)
+// 'multi-audio' = múltiplos idiomas incluindo PT-BR
+const ANIME_PTBR_KEYWORDS = [
+  'pt-br', 'ptbr', 'portugues', 'brasileiro',
+  'brazilian', 'brasil', 'nacional', 'dublado',
   'por-br', 'dual-sigma', 'dual-cza', 'dual-xor',
   'dual-bioma', 'dual-c76', 'andrehsa', 'c0ral',
   'cbr', 'brremux', 'arcanjo', 'dual-nogroup',
-  'dual-c.a.a', 'portugues'
+  'dual-c.a.a'
+];
+
+const ANIME_MULTI_KEYWORDS = [
+  'multi-audio', 'multi audio'
 ];
 
 function normalizeLanguages(langs) {
@@ -47,19 +51,33 @@ function detectMulti(torrent) {
     || /multi/.test((torrent.name || '').toLowerCase());
 }
 
-function detectAnimeDubbed(torrent) {
+// PT-BR explicito em animes (dublado/portugues/nacionais/etc)
+function detectAnimePtBr(torrent) {
   const name = (torrent.name || '').toLowerCase();
-  return ANIME_DUBBED_KEYWORDS.some(k => name.includes(k));
+  return ANIME_PTBR_KEYWORDS.some(k => name.includes(k));
+}
+
+// multi-audio em animes = multiplos idiomas incluindo PT-BR
+function detectAnimeMulti(torrent) {
+  const name = (torrent.name || '').toLowerCase();
+  return ANIME_MULTI_KEYWORDS.some(k => name.includes(k));
 }
 
 function languageScore(torrent, preferredLangs, isAnime = false) {
   if (isAnime) {
-    // Para animes: dublado PT-BR recebe score máximo (5)
-    // multi-audio sem PT-BR explícito recebe score alto (4)
-    if (detectPtBr(torrent)) return 5;
-    if (detectAnimeDubbed(torrent)) return 4;
+    // Prioridade para animes:
+    // 5 = PT-BR explicito (dublado, pt-br, nacional, etc)
+    // 4 = multi-audio (multiplos idiomas incluindo PT-BR)
+    // 3 = multi generico
+    // 2 = idioma preferido do usuario
+    // 1 = dual audio (EN+JA apenas, sem PT-BR)
+    // 0 = sem correspondencia
+    if (detectAnimePtBr(torrent)) return 5;
+    if (detectAnimeMulti(torrent)) return 4;
     if (detectMulti(torrent)) return 3;
     if (torrent.languages?.some(l => preferredLangs.includes(l.value))) return 2;
+    const name = (torrent.name || '').toLowerCase();
+    if (name.includes('dual audio') || name.includes('dual-audio')) return 1;
     return 0;
   }
   // Comportamento padrao para filmes/series
@@ -83,6 +101,52 @@ function reorderByLanguage(torrents, preferredLangs, debug = false, isAnime = fa
   return scored
     .sort((a, b) => b.score - a.score)
     .map(o => o.t);
+}
+
+
+/**
+ * Normaliza um título para comparação: lowercase, remove pontuação, colapsa espaços.
+ */
+function normalizeTitle(str) {
+  return str
+    .toLowerCase()
+    .replace(/[:\-–_.,!?'"()\[\]{}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Verifica se o nome do torrent corresponde ao título buscado.
+ * Retorna true se o torrent contém todas as palavras significativas do título.
+ * Palavras com menos de 2 caracteres são ignoradas.
+ * Para animes, aceita variações comuns de romanização.
+ */
+function titleMatches(torrentName, searchTitle, isAnime = false) {
+  if (!searchTitle) return true;
+
+  const normTorrent = normalizeTitle(torrentName);
+  const normTitle   = normalizeTitle(searchTitle);
+
+  // Palavras do título buscado (filtra artigos e palavras muito curtas)
+  const STOP = new Set(['the', 'a', 'an', 'of', 'in', 'on', 'at', 'to', 'no', 'wa', 'ga', 'wo']);
+  const titleWords = normTitle.split(' ').filter(w => w.length >= 2 && !STOP.has(w));
+
+  if (titleWords.length === 0) return true;
+
+  // Todas as palavras do título devem aparecer no nome do torrent
+  const matched = titleWords.filter(w => normTorrent.includes(w));
+  const ratio   = matched.length / titleWords.length;
+
+  // Para títulos curtos (1-2 palavras) exige 100%; para títulos maiores tolera 1 palavra faltando
+  const threshold = titleWords.length <= 2 ? 1.0 : (titleWords.length - 1) / titleWords.length;
+
+  if (ratio >= threshold) return true;
+
+  // Fallback: aceita se o indexer já retornou via busca e pelo menos 60% das palavras batem
+  // (indexers de anime costumam retornar resultados do mesmo universo)
+  if (isAnime && ratio >= 0.6) return true;
+
+  return false;
 }
 
 const actionInProgress = {
@@ -254,24 +318,31 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       const words = parseWords(t.name.toLowerCase());
       if (excludeKeywords.find(w => words.includes(w))) return false;
 
+      // Validacao de titulo: rejeita torrents que nao correspondem ao titulo buscado
+      // Evita resultados de filmes/series sem relacao com o conteudo pedido
+      if (metaInfos.name && !titleMatches(t.name, metaInfos.name, isAnime)) {
+        if (debug) console.log(`[TITLE MISMATCH] "${t.name.slice(0, 80)}" vs "${metaInfos.name}"`);
+        return false;
+      }
+
       if (searchType === 'series' && episode > 0) {
         const nameUpper = t.name.toUpperCase();
 
-        // Verifica padrão SxxExx (usado por séries normais e animes do Nyaa)
+        // Verifica padrao SxxExx (usado por series normais e animes do Nyaa)
         const sMatch = nameUpper.match(/S(\d{1,2})E(\d{1,4})(?:-?E?(\d{1,4}))?/);
         if (sMatch) {
           const fileEpStart = parseInt(sMatch[2]);
           const fileEpEnd = sMatch[3] ? parseInt(sMatch[3]) : fileEpStart;
           if (episode < fileEpStart || episode > fileEpEnd) return false;
           if (!isAnime) {
-            // Para séries normais, também valida a temporada
+            // Para series normais, tambem valida a temporada
             const fileSeason = parseInt(sMatch[1]);
             if (fileSeason !== season) return false;
           }
           return !t.year || t.year === year;
         }
 
-        // Sem SxxExx: para anime tenta numeração absoluta (ex: " - 09 " ou "[09]")
+        // Sem SxxExx: para anime tenta numeracao absoluta (ex: " - 09 " ou "[09]")
         if (isAnime) {
           const absMatch = nameUpper.match(/(?:^|\s|-|\[)0*(\d{1,4})(?:\s|-|\]|$)/g);
           if (absMatch) {
@@ -281,7 +352,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
           return !t.year || t.year === year;
         }
 
-        // Série normal sem SxxExx: filtra por episódio sozinho
+        // Serie normal sem SxxExx: filtra por episodio sozinho
         const eMatch = nameUpper.match(/E(\d{1,4})(?:-?E?(\d{1,4}))?/);
         if (eMatch) {
           const fileEpStart = parseInt(eMatch[1]);
@@ -458,7 +529,7 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
     const isZip = /\.(zip|rar|7z|iso)$/i.test(file.name || t.name);
     const sizeStr = isZip ? `📦 ${size}` : `📂 ${size}`;
 
-    const langFlag = detectPtBr(t) ? '🇧🇷' : (detectAnimeDubbed(t) || detectMulti(t)) ? '🌐' : '';
+    const langFlag = detectAnimePtBr(t) ? '🇧🇷' : (detectAnimeMulti(t) || detectMulti(t)) ? '🌐' : '';
 
     const col1 = `${sizeStr} | 👤 ${seeds}`;
     const col2 = `⚙️ ${t.indexerName || t.indexerId} ${langFlag}`;
