@@ -21,6 +21,17 @@ const PTBR_KEYWORDS = [
   'brremux', 'arcanjo', 'dual-nogroup'
 ];
 
+// Keywords específicas para animes dublados em PT-BR
+const ANIME_DUBBED_KEYWORDS = [
+  'dublado', 'multi-audio', 'multi audio',
+  'pt-br', 'ptbr', 'brazilian'
+  ,
+  'por-br', 'dual-sigma', 'dual-cza', 'dual-xor',
+  'dual-bioma', 'dual-c76', 'andrehsa', 'c0ral',
+  'cbr', 'brremux', 'arcanjo', 'dual-nogroup',
+  'dual-c.a.a', 'portugues'
+];
+
 function normalizeLanguages(langs) {
   if (!Array.isArray(langs)) return [];
   return langs.map(l => String(l).toLowerCase());
@@ -36,19 +47,34 @@ function detectMulti(torrent) {
     || /multi/.test((torrent.name || '').toLowerCase());
 }
 
-function languageScore(torrent, preferredLangs) {
+function detectAnimeDubbed(torrent) {
+  const name = (torrent.name || '').toLowerCase();
+  return ANIME_DUBBED_KEYWORDS.some(k => name.includes(k));
+}
+
+function languageScore(torrent, preferredLangs, isAnime = false) {
+  if (isAnime) {
+    // Para animes: dublado PT-BR recebe score máximo (5)
+    // multi-audio sem PT-BR explícito recebe score alto (4)
+    if (detectPtBr(torrent)) return 5;
+    if (detectAnimeDubbed(torrent)) return 4;
+    if (detectMulti(torrent)) return 3;
+    if (torrent.languages?.some(l => preferredLangs.includes(l.value))) return 2;
+    return 0;
+  }
+  // Comportamento padrao para filmes/series
   if (detectPtBr(torrent)) return 3;
   if (detectMulti(torrent)) return 2;
   if (torrent.languages?.some(l => preferredLangs.includes(l.value))) return 1;
   return 0;
 }
 
-function reorderByLanguage(torrents, preferredLangs, debug = false) {
+function reorderByLanguage(torrents, preferredLangs, debug = false, isAnime = false) {
   const scored = torrents.map(t => {
-    const score = languageScore(t, preferredLangs);
+    const score = languageScore(t, preferredLangs, isAnime);
     if (debug) {
       console.log(
-        `[LANG] ${t.name?.slice(0, 80)} | score=${score} | langs=${(t.languages || []).map(l => l.value).join(',')}`
+        `[LANG] ${t.name?.slice(0, 80)} | score=${score} | anime=${isAnime} | langs=${(t.languages || []).map(l => l.value).join(',')}`
       );
     }
     return { t, score };
@@ -310,7 +336,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .filter(filterSearch)
       .sort(sortBy('seeders', true));
 
-    torrents = reorderByLanguage(torrents, languages, debug)
+    torrents = reorderByLanguage(torrents, languages, debug, isAnime)
       .slice(0, maxTorrents + 3);
 
     const t0Infos = Date.now();
@@ -395,8 +421,8 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       if (hideUncached) uncached = [];
 
       torrents = [
-        ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages, debug),
-        ...reorderByLanguage(uncached.sort(sortBy(...sortUncached)), languages, debug)
+        ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages, debug, isAnime),
+        ...reorderByLanguage(uncached.sort(sortBy(...sortUncached)), languages, debug, isAnime)
       ].slice(0, maxTorrents);
 
       console.log(`[${stremioId}] cache ${Date.now()-t0Cache}ms | cached=${cached.length} (debrid=${cached.length - viaSourceOnly} torznab=${viaSourceOnly}) uncached=${uncached.length} | final=${torrents.length}`);
@@ -432,7 +458,7 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
     const isZip = /\.(zip|rar|7z|iso)$/i.test(file.name || t.name);
     const sizeStr = isZip ? `📦 ${size}` : `📂 ${size}`;
 
-    const langFlag = detectPtBr(t) ? '🇧🇷' : detectMulti(t) ? '🌐' : '';
+    const langFlag = detectPtBr(t) ? '🇧🇷' : (detectAnimeDubbed(t) || detectMulti(t)) ? '🌐' : '';
 
     const col1 = `${sizeStr} | 👤 ${seeds}`;
     const col2 = `⚙️ ${t.indexerName || t.indexerId} ${langFlag}`;
