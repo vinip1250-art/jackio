@@ -53,16 +53,28 @@ export default class P2P {
    * Retorna stream direto (magnet)
    */
 async getDownload(file) {
-  let url = file.id;
+  let url = file?.id;
 
-  // Se não for string, corrige
-  if (typeof url !== 'string') {
-    url = String(url);
+  // 🔥 Caso venha objeto (bug atual)
+  if (typeof url === 'object') {
+    // tenta extrair magnet
+    if (url?.magnet) url = url.magnet;
+    else if (url?.url) url = url.url;
+    else url = JSON.stringify(url); // fallback debug
   }
 
-  // Se for magnet, retorna como string pura (sem quebrar URL parser)
-  if (url.startsWith('magnet:')) {
-    return url;
+  if (!url) {
+    throw new Error('P2P: invalid file id');
+  }
+
+  url = String(url);
+
+  // garante formato magnet válido
+  if (!url.startsWith('magnet:')) {
+    // tenta converter hash em magnet
+    if (/^[a-f0-9]{40}$/i.test(url)) {
+      url = `magnet:?xt=urn:btih:${url}`;
+    }
   }
 
   return url;
