@@ -9,27 +9,60 @@ export default class P2P {
   }
 
   /**
-   * Simula cache: no P2P tudo é "disponível"
+   * Necessário pro cache do sistema
+   */
+  async getUserHash() {
+    return 'p2p'; // valor fixo (sem usuário)
+  }
+
+  /**
+   * No P2P tudo é "disponível"
    */
   async getTorrentsCached(torrents) {
-    return torrents.map(torrent => ({
-      ...torrent,
+    return torrents.map(t => ({
+      ...t,
       cached: true
     }));
   }
 
   /**
-   * Pass-through
+   * Quando o sistema tenta pegar arquivos do torrent
+   * Aqui usamos magnet direto
    */
+  async getFilesFromMagnet(magnetUrl) {
+    return [{
+      id: magnetUrl,
+      name: magnetUrl,
+      size: 0
+    }];
+  }
+
+  async getFilesFromHash(infoHash) {
+    return [{
+      id: `magnet:?xt=urn:btih:${infoHash}`,
+      name: infoHash,
+      size: 0
+    }];
+  }
+
+  async getFilesFromBuffer(buffer, infoHash) {
+    return this.getFilesFromHash(infoHash);
+  }
+
+  /**
+   * Retorna stream direto (magnet)
+   */
+  async getDownload(file) {
+    return {
+      url: file.id // magnet link
+    };
+  }
+
   async getStreams(streams) {
     return streams;
   }
 
   async resolve(stream) {
-    return stream;
-  }
-
-  async getDownload(stream) {
     return stream;
   }
 }
