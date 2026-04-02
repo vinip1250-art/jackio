@@ -1,6 +1,8 @@
 export default {
   // Server port
   port: parseInt(process.env.PORT || 4000),
+  P2P_MODE: process.env.P2P_MODE || "direct",
+TORRSERVER_URL: process.env.TORRSERVER_URL || "",
   // https://expressjs.com/en/guide/behind-proxies.html
   trustProxy: boolOrString(process.env.TRUST_PROXY || 'loopback, linklocal, uniquelocal'),
   // Redis URI for caching (replaces SQLite cache.db)
