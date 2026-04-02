@@ -1,5 +1,3 @@
-import { buildP2PStreams } from "./p2p.js";
-import { buildTorrServerStreams } from "./debrid/torrserver.js";
 import debridlink from "./debrid/debridlink.js";
 import alldebrid from "./debrid/alldebrid.js";
 import realdebrid from './debrid/realdebrid.js';
