@@ -10,7 +10,6 @@ import hybridoc from './debrid/hybrid-oc.js';
 
 export {ERROR} from './debrid/const.js';
 
-// Adicionado "p2p"
 const debrid = {
   debridlink, 
   alldebrid, 
@@ -21,7 +20,6 @@ const debrid = {
   hybrid,
   offcloud,
   hybridoc,
-  p2p // ✅ NOVO
 };
 
 export function instance(userConfig){
