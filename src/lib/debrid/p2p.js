@@ -52,17 +52,19 @@ export default class P2P {
   /**
    * Retorna stream direto (magnet)
    */
-  async getDownload(file) {
-    return {
-      url: file.id // magnet link
-    };
+async getDownload(file) {
+  let url = file.id;
+
+  // Se não for string, corrige
+  if (typeof url !== 'string') {
+    url = String(url);
   }
 
-  async getStreams(streams) {
-    return streams;
+  // Se for magnet, retorna como string pura (sem quebrar URL parser)
+  if (url.startsWith('magnet:')) {
+    return url;
   }
 
-  async resolve(stream) {
-    return stream;
-  }
+  return url;
+}
 }
