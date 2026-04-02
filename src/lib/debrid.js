@@ -7,10 +7,11 @@ import torbox from './debrid/torbox.js';
 import hybrid from './debrid/hybrid.js'; 
 import offcloud from './debrid/offcloud.js';
 import hybridoc from './debrid/hybrid-oc.js';
+import p2p from './debrid/p2p.js'; // ✅ NOVO: P2P sem debrid
 
 export {ERROR} from './debrid/const.js';
 
-// Corrigido "hibrid" para "hybrid" e adicionado "torbox"
+// Adicionado "p2p"
 const debrid = {
   debridlink, 
   alldebrid, 
@@ -20,7 +21,8 @@ const debrid = {
   torbox, 
   hybrid,
   offcloud,
-  hybridoc
+  hybridoc,
+  p2p // ✅ NOVO
 };
 
 export function instance(userConfig){
