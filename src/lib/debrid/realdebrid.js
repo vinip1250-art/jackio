@@ -2,8 +2,7 @@ import {createHash} from 'crypto';
 import {ERROR} from './const.js';
 import {wait, isVideo} from '../util.js';
 import config from '../config.js';
-import pLimit from 'p-limit';
-import {checkCacheViaStremThru} from '../stremthruCache.js';
+import pLimit from 'p-limit'; 
 
 export default class RealDebrid {
 
@@ -30,113 +29,102 @@ export default class RealDebrid {
     this.#ip = userConfig.ip || '';
   }
 
-  async getTorrentsCached(torrents) {
-    const items = torrents.map(t => {
-      let hash = t.infos?.infoHash || t.infoHash;
-      if (!hash && (t.magneturl || t.infos?.magnetUrl)) {
-        const match = (t.magneturl || t.infos?.magnetUrl).match(/xt=urn:btih:([a-zA-Z0-9]+)/);
-        if (match) hash = match[1];
-      }
-      return { hash: hash?.toLowerCase(), magnet: t.magneturl || t.infos?.magnetUrl, original: t };
-    }).filter(i => i.hash);
-
-    if (items.length === 0) return [];
-
-    // --- Estratégia 1: StremThru (rápido, verifica TODOS os hashes em bulk) ---
-    // O StremThru atua como proxy para a API do RD usando a chave do usuário.
-    // Muito mais eficiente que o addMagnet: sem poluir a conta, sem limite de 5 itens.
-    const stremthruAvailable = !!(process.env.STREMTHRU_URL || config.stremthruUrl);
-    if (stremthruAvailable) {
-      try {
-        const hashes = items.map(i => i.hash);
-        const cached = await checkCacheViaStremThru(hashes, 'realdebrid', this.#apiKey);
-        if (cached.size > 0 || hashes.length <= 5) {
-          // Se StremThru respondeu (mesmo sem hits) ou é uma consulta pequena,
-          // confiar no resultado e não chamar o addMagnet.
-          return items
-            .filter(i => cached.has(i.hash))
-            .map(i => i.original);
-        }
-        // Se StremThru retornou zero para muitos hashes, pode estar offline —
-        // cai para o fallback addMagnet.
-        console.warn('[RD] StremThru retornou 0 cached para lote grande — usando fallback addMagnet.');
-      } catch (e) {
-        console.warn(`[RD] StremThru indisponível (${e.message}), usando fallback addMagnet.`);
-      }
-    }
-
-    // --- Estratégia 2: Fallback — addMagnet (método original) ---
-    // Usado apenas quando StremThru não está configurado ou falhou.
-    // Limitado a top 5 para não poluir a conta do usuário.
+  async getTorrentsCached(torrents){
     try {
-      return await this.#checkByAddMagnet(items);
+        const items = torrents.map(t => {
+            let hash = t.infos?.infoHash || t.infoHash;
+            if (!hash && (t.magneturl || t.infos?.magnetUrl)) {
+                 const match = (t.magneturl || t.infos?.magnetUrl).match(/xt=urn:btih:([a-zA-Z0-9]+)/);
+                 if(match) hash = match[1];
+            }
+            return { hash: hash?.toLowerCase(), magnet: t.magneturl || t.infos?.magnetUrl, original: t };
+        }).filter(i => i.hash);
+
+        if (items.length === 0) return [];
+
+        // Log para confirmar que a função iniciou
+        // console.log(`[RD] Iniciando verificação manual para ${items.length} itens...`);
+
+        // Vai direto para o método manual (AddMagnet) que funcionou nos logs anteriores
+        return await this.#checkByAddMagnet(items);
+
     } catch (e) {
-      console.error(`[RD] ERRO em getTorrentsCached: ${e.message}`);
-      return [];
+        // SEGURANÇA MÁXIMA: Se der erro, loga e retorna vazio para não quebrar o addon
+        console.error(`[RD] ERRO CRÍTICO em getTorrentsCached: ${e.message}`);
+        return [];
     }
   }
 
-  // --- FALLBACK: addMagnet (legado, usado apenas sem StremThru) ---
+  // --- MÉTODO MANUAL (O QUE FUNCIONOU) ---
   async #checkByAddMagnet(items) {
-    const topItems = items.slice(0, 5);
+    // Top 5 para agilidade
+    const topItems = items.slice(0, 5); 
     const cachedHashes = new Set();
-    const limit = pLimit(2);
+    const limit = pLimit(2); 
 
     await Promise.all(topItems.map(item => limit(async () => {
-      try {
-        let magnetLink = item.magnet;
-        if (!magnetLink || !magnetLink.includes('xt=urn:btih')) {
-          if (item.hash) {
-            const trackers = [
-              'udp://tracker.opentrackr.org:1337/announce',
-              'udp://open.stealth.si:80/announce'
-            ];
-            magnetLink = `magnet:?xt=urn:btih:${item.hash}&dn=Package&tr=${trackers.join('&tr=')}`;
-          } else {
-            return;
-          }
-        }
-
-        const bodyStr = `magnet=${encodeURIComponent(magnetLink)}`;
-        const addRes = await this.#request('POST', `/torrents/addMagnet`, {
-          body: bodyStr,
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-        });
-
-        if (addRes && addRes.id) {
-          const torrentId = addRes.id;
-          let infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
-
-          if (infoRes.status === 'waiting_files_selection') {
-            await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {
-              body: 'files=all',
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-            });
-            await wait(700);
-            infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
-          }
-
-          if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
-            cachedHashes.add(item.hash);
-          } else {
-            await wait(800);
-            infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
-            if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
-              cachedHashes.add(item.hash);
+        try {
+            let magnetLink = item.magnet;
+            // Reconstrói magnet se necessário
+            if (!magnetLink || !magnetLink.includes('xt=urn:btih')) {
+                 if(item.hash) {
+                     const trackers = [
+                        'udp://tracker.opentrackr.org:1337/announce',
+                        'udp://open.stealth.si:80/announce'
+                     ];
+                     magnetLink = `magnet:?xt=urn:btih:${item.hash}&dn=Package&tr=${trackers.join('&tr=')}`;
+                 } else {
+                     return;
+                 }
             }
-          }
 
-          // Sempre deleta para não poluir a conta
-          await this.#request('DELETE', `/torrents/delete/${torrentId}`);
+            // Construção Manual do Body (String) para evitar erros de parser do RD
+            const bodyStr = `magnet=${encodeURIComponent(magnetLink)}`;
+            
+            const addRes = await this.#request('POST', `/torrents/addMagnet`, {
+                body: bodyStr,
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+            });
+            
+            if (addRes && addRes.id) {
+                const torrentId = addRes.id;
+                
+                let infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
+
+                if (infoRes.status === 'waiting_files_selection') {
+                    await this.#request('POST', `/torrents/selectFiles/${torrentId}`, {
+                        body: 'files=all',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                    });
+                    await wait(700); 
+                    infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
+                }
+
+                // Verifica cache
+                if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
+                    // console.log(`[RD] Cache OK: ${item.hash}`);
+                    cachedHashes.add(item.hash);
+                } else {
+                    // Polling extra rápido se não estiver pronto de imediato
+                     await wait(800);
+                     infoRes = await this.#request('GET', `/torrents/info/${torrentId}`);
+                     if (infoRes.status === 'downloaded' || infoRes.progress === 100) {
+                        cachedHashes.add(item.hash);
+                     }
+                }
+
+                // Limpeza
+                await this.#request('DELETE', `/torrents/delete/${torrentId}`);
+            }
+        } catch (e) {
+             // Ignora erro individual
+             // console.error(`[RD] Erro item: ${e.message}`);
         }
-      } catch (e) {
-        // Ignora erro individual do item
-      }
     })));
 
     return items
-      .filter(item => cachedHashes.has(item.hash))
-      .map(item => item.original);
+        .filter(item => cachedHashes.has(item.hash))
+        .map(item => item.original);
   }
 
   async getProgressTorrents(torrents){
