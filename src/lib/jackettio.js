@@ -48,7 +48,7 @@ function detectPtBr(torrent) {
 
 function detectMulti(torrent) {
   return torrent.languages?.some(l => l.value === 'multi')
-    || /multi/.test((torrent.name || '').toLowerCase());
+    || /(?:^|[\s.\-_])(?:multi(?:[-.]?audio)?|MULTi|Ml)(?:[\s.\-_]|$)/i.test(torrent.name || '');
 }
 
 // PT-BR explicito em animes (dublado/portugues/nacionais/etc)
@@ -63,15 +63,16 @@ function detectAnimeMulti(torrent) {
   return ANIME_MULTI_KEYWORDS.some(k => name.includes(k));
 }
 
-function languageScore(torrent, preferredLangs, isAnime = false) {
+function languageScore(torrent, preferredLangs, isAnime = false, priorityKeywords = []) {
+  // Verifica keywords prioritárias do usuário (mesmo peso do idioma preferido)
+  if (priorityKeywords.length > 0) {
+    const nameLower = (torrent.name || '').toLowerCase();
+    if (priorityKeywords.some(kw => nameLower.includes(kw.toLowerCase()))) {
+      return isAnime ? 5 : 3; // mesmo score máximo de idioma
+    }
+  }
+
   if (isAnime) {
-    // Prioridade para animes:
-    // 5 = PT-BR explicito (dublado, pt-br, nacional, etc)
-    // 4 = multi-audio (multiplos idiomas incluindo PT-BR)
-    // 3 = multi generico
-    // 2 = idioma preferido do usuario
-    // 1 = dual audio (EN+JA apenas, sem PT-BR)
-    // 0 = sem correspondencia
     if (detectAnimePtBr(torrent)) return 5;
     if (detectAnimeMulti(torrent)) return 4;
     if (detectMulti(torrent)) return 3;
@@ -87,9 +88,9 @@ function languageScore(torrent, preferredLangs, isAnime = false) {
   return 0;
 }
 
-function reorderByLanguage(torrents, preferredLangs, debug = false, isAnime = false) {
+function reorderByLanguage(torrents, preferredLangs, debug = false, isAnime = false, priorityKeywords = []) {
   const scored = torrents.map(t => {
-    const score = languageScore(t, preferredLangs, isAnime);
+    const score = languageScore(t, preferredLangs, isAnime, priorityKeywords);
     if (debug) {
       console.log(
         `[LANG] ${t.name?.slice(0, 80)} | score=${score} | anime=${isAnime} | langs=${(t.languages || []).map(l => l.value).join(',')}`
@@ -117,8 +118,8 @@ function normalizeTitle(str) {
 
 /**
  * Verifica se o nome do torrent corresponde ao título buscado.
- * Retorna true se o torrent contém todas as palavras significativas do título.
- * Palavras com menos de 2 caracteres são ignoradas.
+ * Usa word-boundary matching para evitar falsos positivos em títulos curtos
+ * (ex: "FROM" não deve bater em "Transformers" ou "Frostpunk").
  * Para animes, aceita variações comuns de romanização.
  */
 function titleMatches(torrentName, searchTitle, isAnime = false) {
@@ -133,8 +134,14 @@ function titleMatches(torrentName, searchTitle, isAnime = false) {
 
   if (titleWords.length === 0) return true;
 
-  // Todas as palavras do título devem aparecer no nome do torrent
-  const matched = titleWords.filter(w => normTorrent.includes(w));
+  // Verifica se a palavra aparece como palavra inteira no nome do torrent
+  // (não como substring de outra palavra)
+  const wordInTorrent = (w) => {
+    const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`).test(normTorrent);
+  };
+
+  const matched = titleWords.filter(wordInTorrent);
   const ratio   = matched.length / titleWords.length;
 
   // Para títulos curtos (1-2 palavras) exige 100%; para títulos maiores tolera 1 palavra faltando
@@ -142,8 +149,7 @@ function titleMatches(torrentName, searchTitle, isAnime = false) {
 
   if (ratio >= threshold) return true;
 
-  // Fallback: aceita se o indexer já retornou via busca e pelo menos 60% das palavras batem
-  // (indexers de anime costumam retornar resultados do mesmo universo)
+  // Fallback para animes: aceita se pelo menos 60% das palavras batem (word-boundary)
   if (isAnime && ratio >= 0.6) return true;
 
   return false;
@@ -298,6 +304,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
     let {
       qualities,
       excludeKeywords,
+      priorityKeywords = [],
       maxTorrents,
       sortCached,
       sortUncached,
@@ -309,6 +316,10 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
     } = userConfig;
 
     languages = normalizeLanguages(languages);
+
+    if (priorityKeywords.length > 0) {
+      console.log(`[PRIORITY_KW] keywords configuradas: ${priorityKeywords.join(', ')}`);
+    }
 
     const isAnime = type === 'anime' || metaInfos.isKitsu;
     const searchType = isAnime ? 'series' : type;
@@ -407,8 +418,22 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .filter(filterSearch)
       .sort(sortBy('seeders', true));
 
-    torrents = reorderByLanguage(torrents, languages, debug, isAnime)
-      .slice(0, maxTorrents + 3);
+    // Separa torrents prioritários (keywords + idioma) dos demais
+    // Prioritários passam pelo pipeline completo sem limite de corte antecipado
+    const isPriority = (t) => {
+      if (priorityKeywords.length > 0) {
+        const name = (t.name || '').toLowerCase();
+        if (priorityKeywords.some(kw => name.includes(kw.toLowerCase()))) return true;
+      }
+      return languageScore(t, languages, isAnime, priorityKeywords) > 0;
+    };
+
+    const priorityTorrents = torrents.filter(isPriority);
+    const restTorrents     = torrents.filter(t => !isPriority(t));
+
+    // Processa prioritários + complemento até maxTorrents + 3 para torrentInfos
+    const slotsForRest = Math.max(0, maxTorrents + 3 - priorityTorrents.length);
+    torrents = [...priorityTorrents, ...restTorrents.slice(0, slotsForRest)];
 
     const t0Infos = Date.now();
     const limit = pLimit(10);
@@ -492,8 +517,8 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       if (hideUncached) uncached = [];
 
       torrents = [
-        ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages, debug, isAnime),
-        ...reorderByLanguage(uncached.sort(sortBy(...sortUncached)), languages, debug, isAnime)
+        ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages, debug, isAnime, priorityKeywords),
+        ...reorderByLanguage(uncached.sort(sortBy(...sortUncached)), languages, debug, isAnime, priorityKeywords)
       ].slice(0, maxTorrents);
 
       console.log(`[${stremioId}] cache ${Date.now()-t0Cache}ms | cached=${cached.length} (debrid=${cached.length - viaSourceOnly} torznab=${viaSourceOnly}) uncached=${uncached.length} | final=${torrents.length}`);
