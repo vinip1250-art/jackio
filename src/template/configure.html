@@ -60,8 +60,13 @@
           </div>
           <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('excludeKeywords')">
             <label>Excluir palavras-chave do nome do torrent</label>
-            <input type="text" v-model="form.excludeKeywords" placeholder="palabra1,palabra2" class="form-control">
+            <input type="text" v-model="form.excludeKeywords" placeholder="palavra1,palavra2" class="form-control">
             <small class="text-muted">Ejemplo: cam,xvid</small>
+          </div>
+          <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('priorityKeywords')">
+            <label>Palavras-chave prioritárias no nome do arquivo</label>
+            <input type="text" v-model="form.priorityKeywords" placeholder="palavra1,palavra2" class="form-control">
+            <small class="text-muted">Torrents cujo nome contenha qualquer uma dessas palavras serão priorizados com o mesmo peso do idioma preferido. Ex: dual,dublado,pt-br</small>
           </div>
           <div class="mb-3 d-flex flex-row" v-if="!immulatableUserConfigKeys.includes('hideUncached')">
             <div class="form-check form-switch">
@@ -247,6 +252,7 @@
             maxTorrents: defaultUserConfig.maxTorrents,
             priotizePackTorrents: defaultUserConfig.priotizePackTorrents,
             excludeKeywords: defaultUserConfig.excludeKeywords.join(','),
+            priorityKeywords: (defaultUserConfig.priorityKeywords || []).join(','),
             debridId: defaultUserConfig.debridId || '',
             hideUncached: defaultUserConfig.hideUncached,
             sortCached: defaultUserConfig.sortCached,
@@ -271,6 +277,7 @@
               userConfig.qualities = qualities.filter(quality => quality.checked).map(quality => quality.value);
               userConfig.indexers = indexers.filter(indexer => indexer.checked).map(indexer => indexer.value);
               userConfig.excludeKeywords = form.value.excludeKeywords.split(',').filter(Boolean);
+              userConfig.priorityKeywords = form.value.priorityKeywords.split(',').map(s => s.trim()).filter(Boolean);
               debrid.value.configFields.forEach(field => {
                 if(field.required && !field.value)throw new Error(`${field.label} is required`);
                 userConfig[field.name] = field.value
