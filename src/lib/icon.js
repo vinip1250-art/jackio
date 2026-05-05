@@ -1,16 +1,6 @@
 import path from 'path'
+import { fileURLToPath } from 'url'
 
-/**
- * Pasta base para dados persistentes.
- * - Usa DATA_FOLDER se definida
- * - Caso contrário, cai para /data (padrão de container)
- */
-const dataFolder = process.env.DATA_FOLDER || '/data'
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-/**
- * Caminho absoluto do ícone do addon
- */
-export const iconPath = path.join(
-  dataFolder,
-  'icon.png'
-)
+export const iconPath = path.join(__dirname, '..', 'static', 'img', 'jackio.png')
