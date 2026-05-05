@@ -75,6 +75,7 @@ export default {
   defaultUserConfig: {
     qualities: commaListToArray(process.env.DEFAULT_QUALITIES || '0, 720, 1080').map(v => parseInt(v)),
     excludeKeywords: commaListToArray(process.env.DEFAULT_EXCLUDE_KEYWORDS || ''),
+    priorityKeywords: commaListToArray(process.env.DEFAULT_PRIORITY_KEYWORDS || ''),
     maxTorrents: parseInt(process.env.DEFAULT_MAX_TORRENTS || 8),
     priotizeLanguages: commaListToArray(process.env.DEFAULT_PRIOTIZE_LANGUAGES || ''),
     priotizePackTorrents:  parseInt(process.env.DEFAULT_PRIOTIZE_PACK_TORRENTS || 2),
