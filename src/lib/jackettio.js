@@ -15,7 +15,6 @@ const PTBR_KEYWORDS = [
   'pt-br', 'ptbr', 'portugues', 'dual-sigma',
   'brazilian', 'brasil', 'dual-cza', 'dual-xor',
   'dublado', 'nacional', 'por-br', 'dual-c.a.a',
-  'multi-audio', 'multi audio',
   'dual-bioma', 'dual-c76', 'andrehsa',
   'c0ral', 'cbr', 'brremux', 'sigla',
   'arcanjo', 'dual-nogroup'
@@ -48,7 +47,7 @@ function detectPtBr(torrent) {
 
 function detectMulti(torrent) {
   return torrent.languages?.some(l => l.value === 'multi')
-    || /(?:^|[\s.\-_])(?:multi(?:[-.]?audio)?|MULTi|Ml)(?:[\s.\-_]|$)/i.test(torrent.name || '');
+    || /\bmulti\b/i.test(torrent.name || '');
 }
 
 // PT-BR explicito em animes (dublado/portugues/nacionais/etc)
@@ -63,16 +62,15 @@ function detectAnimeMulti(torrent) {
   return ANIME_MULTI_KEYWORDS.some(k => name.includes(k));
 }
 
-function languageScore(torrent, preferredLangs, isAnime = false, priorityKeywords = []) {
-  // Verifica keywords prioritárias do usuário (mesmo peso do idioma preferido)
-  if (priorityKeywords.length > 0) {
-    const nameLower = (torrent.name || '').toLowerCase();
-    if (priorityKeywords.some(kw => nameLower.includes(kw.toLowerCase()))) {
-      return isAnime ? 5 : 3; // mesmo score máximo de idioma
-    }
-  }
-
+function languageScore(torrent, preferredLangs, isAnime = false) {
   if (isAnime) {
+    // Prioridade para animes:
+    // 5 = PT-BR explicito (dublado, pt-br, nacional, etc)
+    // 4 = multi-audio (multiplos idiomas incluindo PT-BR)
+    // 3 = multi generico
+    // 2 = idioma preferido do usuario
+    // 1 = dual audio (EN+JA apenas, sem PT-BR)
+    // 0 = sem correspondencia
     if (detectAnimePtBr(torrent)) return 5;
     if (detectAnimeMulti(torrent)) return 4;
     if (detectMulti(torrent)) return 3;
@@ -88,9 +86,9 @@ function languageScore(torrent, preferredLangs, isAnime = false, priorityKeyword
   return 0;
 }
 
-function reorderByLanguage(torrents, preferredLangs, debug = false, isAnime = false, priorityKeywords = []) {
+function reorderByLanguage(torrents, preferredLangs, debug = false, isAnime = false) {
   const scored = torrents.map(t => {
-    const score = languageScore(t, preferredLangs, isAnime, priorityKeywords);
+    const score = languageScore(t, preferredLangs, isAnime);
     if (debug) {
       console.log(
         `[LANG] ${t.name?.slice(0, 80)} | score=${score} | anime=${isAnime} | langs=${(t.languages || []).map(l => l.value).join(',')}`
@@ -118,39 +116,34 @@ function normalizeTitle(str) {
 
 /**
  * Verifica se o nome do torrent corresponde ao título buscado.
- * Usa word-boundary matching para evitar falsos positivos em títulos curtos
- * (ex: "FROM" não deve bater em "Transformers" ou "Frostpunk").
+ * Retorna true se o torrent contém todas as palavras significativas do título.
+ * Palavras com menos de 2 caracteres são ignoradas.
  * Para animes, aceita variações comuns de romanização.
  */
 function titleMatches(torrentName, searchTitle, isAnime = false) {
   if (!searchTitle) return true;
 
   const normTorrent = normalizeTitle(torrentName);
-  const normTitle   = normalizeTitle(searchTitle);
 
-  // Palavras do título buscado (filtra artigos e palavras muito curtas)
+  // Tenta match com o título completo e, se falhar, com a parte principal (antes do " - ")
+  const titlesToTry = [searchTitle];
+  const dashIdx = searchTitle.indexOf(' - ');
+  if (dashIdx > 0) titlesToTry.push(searchTitle.slice(0, dashIdx));
+
   const STOP = new Set(['the', 'a', 'an', 'of', 'in', 'on', 'at', 'to', 'no', 'wa', 'ga', 'wo']);
-  const titleWords = normTitle.split(' ').filter(w => w.length >= 2 && !STOP.has(w));
 
-  if (titleWords.length === 0) return true;
+  for (const title of titlesToTry) {
+    const normTitle  = normalizeTitle(title);
+    const titleWords = normTitle.split(' ').filter(w => w.length >= 2 && !STOP.has(w));
+    if (titleWords.length === 0) return true;
 
-  // Verifica se a palavra aparece como palavra inteira no nome do torrent
-  // (não como substring de outra palavra)
-  const wordInTorrent = (w) => {
-    const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`).test(normTorrent);
-  };
+    const matched   = titleWords.filter(w => normTorrent.includes(w));
+    const ratio     = matched.length / titleWords.length;
+    const threshold = titleWords.length <= 2 ? 1.0 : (titleWords.length - 1) / titleWords.length;
 
-  const matched = titleWords.filter(wordInTorrent);
-  const ratio   = matched.length / titleWords.length;
-
-  // Para títulos curtos (1-2 palavras) exige 100%; para títulos maiores tolera 1 palavra faltando
-  const threshold = titleWords.length <= 2 ? 1.0 : (titleWords.length - 1) / titleWords.length;
-
-  if (ratio >= threshold) return true;
-
-  // Fallback para animes: aceita se pelo menos 60% das palavras batem (word-boundary)
-  if (isAnime && ratio >= 0.6) return true;
+    if (ratio >= threshold) return true;
+    if (isAnime && ratio >= 0.6) return true;
+  }
 
   return false;
 }
@@ -304,22 +297,18 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
     let {
       qualities,
       excludeKeywords,
-      priorityKeywords = [],
       maxTorrents,
       sortCached,
       sortUncached,
       indexerTimeoutSec = 5,
-      languages = [],
+      languages: _languages = [],
+      priotizeLanguages = [],
       indexers: userIndexers,
       hideUncached,
       debug
     } = userConfig;
 
-    languages = normalizeLanguages(languages);
-
-    if (priorityKeywords.length > 0) {
-      console.log(`[PRIORITY_KW] keywords configuradas: ${priorityKeywords.join(', ')}`);
-    }
+    let languages = normalizeLanguages([..._languages, ...priotizeLanguages]);
 
     const isAnime = type === 'anime' || metaInfos.isKitsu;
     const searchType = isAnime ? 'series' : type;
@@ -339,36 +328,60 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       if (searchType === 'series' && episode > 0) {
         const nameUpper = t.name.toUpperCase();
 
-        // Verifica padrao SxxExx (usado por series normais e animes do Nyaa)
-        const sMatch = nameUpper.match(/S(\d{1,2})E(\d{1,4})(?:-?E?(\d{1,4}))?/);
-        if (sMatch) {
-          const fileEpStart = parseInt(sMatch[2]);
-          const fileEpEnd = sMatch[3] ? parseInt(sMatch[3]) : fileEpStart;
-          if (episode < fileEpStart || episode > fileEpEnd) return false;
-          if (!isAnime) {
-            // Para series normais, tambem valida a temporada
-            const fileSeason = parseInt(sMatch[1]);
-            if (fileSeason !== season) return false;
-          }
-          return !t.year || t.year === year;
+        // Verifica padrão SxxExx (series normais e animes do Nyaa)
+        // Usa matchAll para capturar múltiplos padrões no nome (ex: packs multi-ep)
+        const sMatches = [...nameUpper.matchAll(/S(\d{1,2})E(\d{1,4})(?:-?E?(\d{1,4}))?/g)];
+        if (sMatches.length > 0) {
+          // Valida temporada: pelo menos um match deve ser da temporada correta
+          const seasonMatches = sMatches.filter(m => parseInt(m[1]) === season || isAnime);
+          if (!isAnime && seasonMatches.length === 0) return false;
+
+          // Valida episódio: pelo menos um match deve cobrir o episódio pedido
+          const epMatches = (isAnime ? sMatches : seasonMatches);
+          const coversEp = epMatches.some(m => {
+            const epStart = parseInt(m[2]);
+            const epEnd   = m[3] ? parseInt(m[3]) : epStart;
+            return episode >= epStart && episode <= epEnd;
+          });
+          return coversEp;
         }
 
-        // Sem SxxExx: para anime tenta numeracao absoluta (ex: " - 09 " ou "[09]")
+        // Pack de temporada completa sem episódio (ex: Show.S02.Complete, Show.S02.1080p)
+        const seasonOnlyMatch = nameUpper.match(/\bS(\d{1,2})\b(?![\dE])/);
+        if (seasonOnlyMatch) {
+          if (!isAnime && parseInt(seasonOnlyMatch[1]) !== season) return false;
+          // Se há marcador de episódio separado (ex: Show.S05.E05), verificar se cobre o episódio pedido
+          const separateEpMatch = nameUpper.match(/\bE(\d{1,4})(?:-E?(\d{1,4}))?\b/);
+          if (separateEpMatch) {
+            const epStart = parseInt(separateEpMatch[1]);
+            const epEnd   = separateEpMatch[2] ? parseInt(separateEpMatch[2]) : epStart;
+            return episode >= epStart && episode <= epEnd;
+          }
+          // Sem marcador de episódio: é um season pack — aceitar
+          return true;
+        }
+
+        // Sem SxxExx: para anime tenta numeração absoluta (ex: " - 09 " ou "[09]")
         if (isAnime) {
           const absMatch = nameUpper.match(/(?:^|\s|-|\[)0*(\d{1,4})(?:\s|-|\]|$)/g);
           if (absMatch) {
             const nums = absMatch.map(m => parseInt(m.replace(/\D/g, '')));
             if (!nums.includes(episode)) return false;
           }
-          return !t.year || t.year === year;
+          return true;
         }
 
-        // Serie normal sem SxxExx: filtra por episodio sozinho
-        const eMatch = nameUpper.match(/E(\d{1,4})(?:-?E?(\d{1,4}))?/);
+        // Série normal sem SxxExx: filtra por episódio com word boundary para evitar
+        // falsos positivos em palavras como EXTENDED, HEVC, etc.
+        const eMatch = nameUpper.match(/\bE(\d{1,4})(?:-E?(\d{1,4}))?\b/);
         if (eMatch) {
-          const fileEpStart = parseInt(eMatch[1]);
-          const fileEpEnd = eMatch[2] ? parseInt(eMatch[2]) : fileEpStart;
-          if (episode < fileEpStart || episode > fileEpEnd) return false;
+          const epStart = parseInt(eMatch[1]);
+          const epEnd   = eMatch[2] ? parseInt(eMatch[2]) : epStart;
+          if (episode < epStart || episode > epEnd) return false;
+        }
+        // Sem nenhum indicador de episódio: rejeita para evitar resultados não relacionados
+        else {
+          return false;
         }
       }
 
@@ -418,22 +431,8 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .filter(filterSearch)
       .sort(sortBy('seeders', true));
 
-    // Separa torrents prioritários (keywords + idioma) dos demais
-    // Prioritários passam pelo pipeline completo sem limite de corte antecipado
-    const isPriority = (t) => {
-      if (priorityKeywords.length > 0) {
-        const name = (t.name || '').toLowerCase();
-        if (priorityKeywords.some(kw => name.includes(kw.toLowerCase()))) return true;
-      }
-      return languageScore(t, languages, isAnime, priorityKeywords) > 0;
-    };
-
-    const priorityTorrents = torrents.filter(isPriority);
-    const restTorrents     = torrents.filter(t => !isPriority(t));
-
-    // Processa prioritários + complemento até maxTorrents + 3 para torrentInfos
-    const slotsForRest = Math.max(0, maxTorrents + 3 - priorityTorrents.length);
-    torrents = [...priorityTorrents, ...restTorrents.slice(0, slotsForRest)];
+    torrents = reorderByLanguage(torrents, languages, debug, isAnime)
+      .slice(0, Math.max(maxTorrents * 4, 40));
 
     const t0Infos = Date.now();
     const limit = pLimit(10);
@@ -458,6 +457,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         : metaInfos.name;
 
       const t0Cache = Date.now();
+      console.log(`[${stremioId}] cache check: ${torrentsWithHash.length} hashes → debrid=${debridInstance.constructor.id}`);
       const [cacheSourceHashes, cachedFromDebrid] = await Promise.all([
         jackett.searchCacheSources({ q: cacheQ, imdbId, type: searchType }),
         debridInstance.getTorrentsCached(torrentsWithHash)
@@ -517,8 +517,8 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       if (hideUncached) uncached = [];
 
       torrents = [
-        ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages, debug, isAnime, priorityKeywords),
-        ...reorderByLanguage(uncached.sort(sortBy(...sortUncached)), languages, debug, isAnime, priorityKeywords)
+        ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages, debug, isAnime),
+        ...reorderByLanguage(uncached.sort(sortBy(...sortUncached)), languages, debug, isAnime)
       ].slice(0, maxTorrents);
 
       console.log(`[${stremioId}] cache ${Date.now()-t0Cache}ms | cached=${cached.length} (debrid=${cached.length - viaSourceOnly} torznab=${viaSourceOnly}) uncached=${uncached.length} | final=${torrents.length}`);
@@ -548,26 +548,51 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
 
   return torrents.map(t => {
     const file = getFile(t.infos.files || [], type, season, episode) || {};
-    const size = bytesToSize(file.size || t.size);
+    const fileSize = file.size || t.size || 0;
     const seeds = t.seeders || 0;
+    const service = t.shortName || debridInstance.shortName;
+    const cacheSign = t.isCached ? '⚡' : '⏳';
 
-    const isZip = /\.(zip|rar|7z|iso)$/i.test(file.name || t.name);
-    const sizeStr = isZip ? `📦 ${size}` : `📂 ${size}`;
+    // Resolução
+    const resMap = { 2160: '🎞️ 4K', 1080: '🎞️ FHD', 720: '💿 HD', 480: '📼 480p', 360: '📼 360p' };
+    const resLabel = resMap[t.quality] || '';
 
+    // Tamanho
+    const sizeLabel = fileSize > 0 ? `💾 ${bytesToSize(fileSize)}` : '';
+
+    // Áudio/vídeo tags do details
+    const d = t.details || {};
+    const videoTags = (d.video || []).filter(v => !['4K','1080p','720p'].includes(v)); // HDR, DV, IMAX
+    const audioTags = d.audio || [];
+    const codecTags = d.other || [];
+
+    const tagsLine = [
+      ...videoTags,
+      ...codecTags,
+      ...audioTags,
+    ].join(' | ');
+
+    // Idioma
     const langFlag = detectAnimePtBr(t) ? '🇧🇷' : (detectAnimeMulti(t) || detectMulti(t)) ? '🌐' : '';
 
-    const col1 = `${sizeStr} | 👤 ${seeds}`;
-    const col2 = `⚙️ ${t.indexerName || t.indexerId} ${langFlag}`;
-    const col3 = file.name || t.name;
+    // Release group (último token após o último '-' no nome, se parecer um grupo)
+    const releaseGroup = (() => {
+      const m = (t.name || '').match(/-([A-Za-z0-9]{2,15})(?:\[|\s|$)/);
+      return m ? m[1] : '';
+    })();
 
-    // Para hybrid, o shortName já está definido por torrent (TB/OC/RD).
-    // Para serviço simples, usa o shortName da instância.
-    const service = t.shortName || debridInstance.shortName;
-    const cacheSign = t.isCached ? '⚡' : '';
+    const nameLine = `[${service}${cacheSign}] Jackio  ${resLabel}`;
+
+    const titleParts = [
+      [sizeLabel, seeds > 0 ? `🌱 ${seeds}` : ''].filter(Boolean).join('  '),
+      tagsLine ? `📺 ${tagsLine}` : '',
+      [`📡 ${t.indexerName || t.indexerId}`, langFlag, releaseGroup ? `🏷️ ${releaseGroup}` : ''].filter(Boolean).join('  '),
+      `📋 ${file.name || t.name}`,
+    ].filter(Boolean);
 
     return {
-      name: `[${service}${cacheSign}] Jackio`,
-      title: [col1, col2, col3].join('\n'),
+      name: nameLine,
+      title: titleParts.join('\n'),
       url: t.disabled
         ? '#'
         : `${publicUrl}/${btoa(JSON.stringify(userConfig))}/download/${type}/${stremioId}/${t.id}/${file.name || t.name}`
