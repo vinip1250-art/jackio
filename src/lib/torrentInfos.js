@@ -10,7 +10,7 @@ const TORRENT_FOLDER = `${config.dataFolder}/torrents`;
 const CACHE_FILE_DAYS = 7;
 
 export async function createTorrentFolder(){
-  return mkdir(TORRENT_FOLDER).catch(() => false);
+  return mkdir(TORRENT_FOLDER, { recursive: true }).catch(() => false);
 }
 
 export async function cleanTorrentFolder(){

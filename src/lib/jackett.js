@@ -417,6 +417,14 @@ async function fetchTorznabHashes(client, paramsList) {
   return [...allHashes];
 }
 
+/**
+ * Verifica se um torrent veio de uma fonte que já indica cache (stremthru, zilean, etc).
+ * A flag _isCachedSource é marcada no normalizeItems durante a busca.
+ */
+export function isTorrentFromCachedSource(torrent) {
+  return torrent._isCachedSource === true;
+}
+
 export async function searchCacheSources({ q, imdbId, type }) {
   if (torznabClients.length === 0) return new Set();
 

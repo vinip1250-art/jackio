@@ -19,6 +19,7 @@ export default class Torbox {
   ];
 
   #apiKey;
+  #requestQueue = Promise.resolve();
 
   constructor(userConfig) {
     Object.assign(this, this.constructor);
@@ -48,15 +49,15 @@ export default class Torbox {
 
     const hashes = items.map(i => i.hash);
     const cachedHashes = new Set();
-    const chunkSize = 50; 
+    const chunkSize = 100;
     
     for (let i = 0; i < hashes.length; i += chunkSize) {
       const chunk = hashes.slice(i, i + chunkSize);
-      const hashString = chunk.join(',');
-      
       try {
-        const data = await this.#request('GET', '/torrents/checkcached', {
-          query: { hash: hashString, format: 'list', list_files: 'false' }
+        const data = await this.#request('POST', '/torrents/checkcached', {
+          query: { format: 'object', list_files: 'false' },
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hashes: chunk })
         });
         
         if (data && data.data) {
@@ -66,8 +67,8 @@ export default class Torbox {
                     else if (h?.hash) cachedHashes.add(h.hash.toLowerCase());
                 });
             } else if (typeof data.data === 'object') {
-                for (const [hash, isCached] of Object.entries(data.data)) {
-                    if (isCached) cachedHashes.add(hash.toLowerCase());
+                for (const [hash, cached] of Object.entries(data.data)) {
+                    if (cached && cached !== false) cachedHashes.add(hash.toLowerCase());
                 }
             }
         }
@@ -119,6 +120,7 @@ export default class Torbox {
   }
 
   async getFilesFromMagnet(magnet, infoHash){
+    infoHash = infoHash || magnet?.match(/xt=urn:btih:([a-fA-F0-9]{40})/i)?.[1] || '';
     const body = new FormData();
     body.append('magnet', magnet);
     
@@ -143,7 +145,7 @@ export default class Torbox {
         } else if (res?.detail && (res.detail.includes('exists') || res.detail.includes('duplicate'))) {
             return null;
         }
-        console.error(`[Torbox] Erro no create (File: ${isFile}): ${JSON.stringify(res)}`);
+        console.error(`[Torbox] Erro no create (File: ${isFile}, HTTP ${res?._httpStatus || 'desconhecido'}): ${res?.detail || res?._raw || JSON.stringify(res)}`);
         return null;
     } catch(e) {
         console.error(`[Torbox] Exception no create: ${e.message}`);
@@ -173,10 +175,10 @@ export default class Torbox {
         const res = await this.#request('GET', '/torrents/mylist', { query: { bypass_cache: 'true' } });
         
         if (res?.data) {
-            const found = res.data.find(t => t.id === id);
+            const found = res.data.find(t => String(t.id) === String(id));
             
             if (found) {
-                if ((found.download_present === true || found.download_state === 'cached') && found.files && found.files.length > 0) {
+                if ((found.download_finished === true || found.download_present === true || found.download_state === 'cached') && found.files && found.files.length > 0) {
                     torrentInfo = found;
                     break;
                 }
@@ -210,7 +212,7 @@ export default class Torbox {
         token: this.#apiKey, 
         torrent_id: torrentId, 
         file_id: fileId, 
-        zip: 'false' 
+        zip_link: 'false'
     };
 
     try {
@@ -261,6 +263,12 @@ export default class Torbox {
   }
 
   async #request(method, path, opts){
+    const task = this.#requestQueue.then(() => this.#requestWithRetry(method, path, opts));
+    this.#requestQueue = task.catch(() => {});
+    return task;
+  }
+
+  async #requestWithRetry(method, path, opts){
     opts = opts || {};
     const headers = Object.assign(opts.headers || {}, {
       'Authorization': `Bearer ${this.#apiKey}`,
@@ -273,16 +281,33 @@ export default class Torbox {
     const queryParams = new URLSearchParams(opts.query || {}).toString();
     const url = `https://api.torbox.app/v1/api${path}?${queryParams}`;
 
-    const res = await fetch(url, { method, headers, body: opts.body });
-    let data;
-    try { data = await res.json(); } catch(err){ data = {}; }
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const res = await fetch(url, { method, headers, body: opts.body });
+      const raw = await res.text();
+      let data;
+      try { data = raw ? JSON.parse(raw) : {}; } catch { data = {}; }
 
-    if (path.includes('create') && res.status >= 400) return data;
+      if (res.status === 429 && attempt < 3) {
+        const retryAfter = Number(res.headers.get('retry-after'));
+        const delay = Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter * 1000
+          : 1500 * (attempt + 1);
+        console.warn(`[Torbox] Rate limit 429; nova tentativa em ${delay}ms`);
+        await wait(delay);
+        continue;
+      }
 
-    if (res.status >= 400) {
+      if (path.includes('create') && res.status >= 400) {
+        return { ...data, _httpStatus: res.status, _raw: raw.slice(0, 500) };
+      }
+
+      if (res.status >= 400) {
         if (res.status === 401 || res.status === 403) throw new Error(ERROR.EXPIRED_API_KEY);
         throw new Error(data.detail || `Erro Torbox ${res.status}`);
+      }
+      return data;
     }
-    return data;
+
+    throw new Error('Erro Torbox 429');
   }
 }

@@ -6,8 +6,10 @@ import { updateUserConfigWithMediaFlowIp, applyMediaflowProxyIfNeeded } from './
 import * as meta from './meta.js';
 import Kitsu from './meta/kitsu.js';
 import * as jackett from './jackett.js';
+import { isTorrentFromCachedSource } from './jackett.js';
 import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
+import { isConfigured as isQbitConfigured } from './providers/qbittorrent.js';
 
 const kitsuClient = new Kitsu();
 
@@ -62,36 +64,43 @@ function detectAnimeMulti(torrent) {
   return ANIME_MULTI_KEYWORDS.some(k => name.includes(k));
 }
 
-function languageScore(torrent, preferredLangs, isAnime = false) {
-  if (isAnime) {
-    // Prioridade para animes:
-    // 5 = PT-BR explicito (dublado, pt-br, nacional, etc)
-    // 4 = multi-audio (multiplos idiomas incluindo PT-BR)
-    // 3 = multi generico
-    // 2 = idioma preferido do usuario
-    // 1 = dual audio (EN+JA apenas, sem PT-BR)
-    // 0 = sem correspondencia
-    if (detectAnimePtBr(torrent)) return 5;
-    if (detectAnimeMulti(torrent)) return 4;
-    if (detectMulti(torrent)) return 3;
-    if (torrent.languages?.some(l => preferredLangs.includes(l.value))) return 2;
-    const name = (torrent.name || '').toLowerCase();
-    if (name.includes('dual audio') || name.includes('dual-audio')) return 1;
-    return 0;
+function calculateScore(torrent, preferredLangs, priorityKeywords, isAnime = false) {
+  let score = 0;
+  const name = (torrent.name || '').toLowerCase();
+  
+  // Pontuação por palavra-chave (peso alto: +10 cada)
+  if (priorityKeywords && priorityKeywords.length > 0) {
+    for (const kw of priorityKeywords) {
+      if (name.includes(kw.toLowerCase())) {
+        score += 10;
+      }
+    }
   }
-  // Comportamento padrao para filmes/series
-  if (detectPtBr(torrent)) return 3;
-  if (detectMulti(torrent)) return 2;
-  if (torrent.languages?.some(l => preferredLangs.includes(l.value))) return 1;
-  return 0;
+
+  // Pontuação por idioma
+  if (isAnime) {
+    if (detectAnimePtBr(torrent)) score += 5;
+    else if (detectAnimeMulti(torrent)) score += 4;
+    else if (torrent.languages?.some(l => preferredLangs.includes(l.value))) score += 3;
+    else if (detectMulti(torrent)) score += 2;
+    else if (name.includes('dual audio') || name.includes('dual-audio')) score += 1;
+  } else {
+    // Comportamento padrao para filmes/series
+    if (detectPtBr(torrent)) score += 5;
+    else if (torrent.languages?.some(l => preferredLangs.includes(l.value))) score += 4;
+    else if (detectMulti(torrent)) score += 3;
+    else if (name.includes('dual audio') || name.includes('dual-audio')) score += 1;
+  }
+
+  return score;
 }
 
-function reorderByLanguage(torrents, preferredLangs, debug = false, isAnime = false) {
+function reorderTorrents(torrents, preferredLangs, priorityKeywords, debug = false, isAnime = false) {
   const scored = torrents.map(t => {
-    const score = languageScore(t, preferredLangs, isAnime);
+    const score = calculateScore(t, preferredLangs, priorityKeywords, isAnime);
     if (debug) {
       console.log(
-        `[LANG] ${t.name?.slice(0, 80)} | score=${score} | anime=${isAnime} | langs=${(t.languages || []).map(l => l.value).join(',')}`
+        `[SCORE] ${t.name?.slice(0, 80)} | score=${score} | anime=${isAnime} | langs=${(t.languages || []).map(l => l.value).join(',')}`
       );
     }
     return { t, score };
@@ -153,7 +162,7 @@ const actionInProgress = {
   getDownload: {}
 };
 
-function parseStremioId(stremioId) {
+export function parseStremioId(stremioId) {
   // Kitsu IDs: "kitsu:12345:6" (animeId:episodioAbsoluto) ou "kitsu:12345" (filme/OVA)
   if (stremioId.startsWith('kitsu:')) {
     const parts = stremioId.split(':');
@@ -297,6 +306,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
     let {
       qualities,
       excludeKeywords,
+      priorityKeywords = [],
       maxTorrents,
       sortCached,
       sortUncached,
@@ -431,7 +441,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
       .filter(filterSearch)
       .sort(sortBy('seeders', true));
 
-    torrents = reorderByLanguage(torrents, languages, debug, isAnime)
+    torrents = reorderTorrents(torrents, languages, priorityKeywords, debug, isAnime)
       .slice(0, Math.max(maxTorrents * 4, 40));
 
     const t0Infos = Date.now();
@@ -457,20 +467,50 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
         : metaInfos.name;
 
       const t0Cache = Date.now();
-      console.log(`[${stremioId}] cache check: ${torrentsWithHash.length} hashes → debrid=${debridInstance.constructor.id}`);
-      const [cacheSourceHashes, cachedFromDebrid] = await Promise.all([
-        jackett.searchCacheSources({ q: cacheQ, imdbId, type: searchType }),
-        debridInstance.getTorrentsCached(torrentsWithHash)
-      ]);
 
-      const debridCachedHashes = new Set(cachedFromDebrid.map(t => (t.infos?.infoHash || t.infoHash || '').toLowerCase()).filter(Boolean));
+      const isStremThru = debridInstance.constructor.id === 'stremthru';
+      // allFromCachedSource só é relevante quando o debrid NÃO é StremThru
+      const allFromCachedSource = !isStremThru
+        && torrents.length > 0
+        && torrents.every(t => isTorrentFromCachedSource(t));
+
+      console.log(`[${stremioId}] cache check: ${torrentsWithHash.length} hashes → debrid=${debridInstance.constructor.id} | isStremThru=${isStremThru} | allFromCachedSource=${allFromCachedSource}`);
+
+      let cachedFromDebrid = [];
+      let torznabCacheHints = [];
+
+      if (isStremThru) {
+        // StremThru como debrid: DEVE chamar getTorrentsCached() — é ele quem pergunta ao ST
+        // quais hashes estão em cache no store configurado (ex: torbox). Sem isso, todos os
+        // magnets são enviados sem cache e o download trava.
+        cachedFromDebrid = await debridInstance.getTorrentsCached(torrentsWithHash);
+        console.log(`[${stremioId}] [StremThru] cache check: ${torrentsWithHash.length} → ${cachedFromDebrid.length} cached no store`);
+
+      } else if (allFromCachedSource) {
+        // Todos os torrents vieram de fonte Torznab já confirmada como cache (ex: stremthru torznab)
+        // O debrid nativo (Torbox) não precisa ser consultado novamente.
+        const sn = debridInstance.shortName || debridInstance.constructor.shortName || '';
+        cachedFromDebrid = torrentsWithHash.map(t => ({ ...t, shortName: sn }));
+        console.log(`[${stremioId}] ⚡ [TORZNAB Cached]: pulando getTorrentsCached() — todos os ${cachedFromDebrid.length} torrents confirmados pela fonte`);
+
+      } else {
+        // Debrid nativo (Torbox, RD, etc) com Prowlarr normal: checa cache no provider
+        const cacheSourceHashes = await jackett.searchCacheSources({ q: cacheQ, imdbId, type: searchType });
+
+        torznabCacheHints = torrentsWithHash
+          .filter(t => {
+            const hash = (t.infos?.infoHash || '').toLowerCase();
+            return hash && cacheSourceHashes.has(hash);
+          })
+          .map(t => ({ ...t, cacheSourceHint: true }));
+
+        cachedFromDebrid = await debridInstance.getTorrentsCached(torrentsWithHash);
+        console.log(`[${stremioId}] getTorrentsCached: ${torrentsWithHash.length} → ${cachedFromDebrid.length} cached`);
+      }
 
       // Torrents cached via fontes torznab (hash conhecido mas não confirmado pelo debrid)
-      const torznabOnlyCached = torrentsWithHash
-        .filter(t => {
-          const hash = (t.infos?.infoHash || '').toLowerCase();
-          return !debridCachedHashes.has(hash) && hash && cacheSourceHashes.has(hash);
-        })
+      const torznabOnlyCached = torznabCacheHints
+        .filter(t => !cachedFromDebrid.find(ct => (ct.infos?.infoHash || ct.infoHash || '').toLowerCase() === (t.infos?.infoHash || '').toLowerCase()))
         .map(t => ({ ...t, isCached: true }));
 
       // Expande torznabOnlyCached para cada serviço do hybrid (sem shortName definido)
@@ -516,10 +556,35 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
 
       if (hideUncached) uncached = [];
 
-      torrents = [
-        ...reorderByLanguage(cached.sort(sortBy(...sortCached)), languages, debug, isAnime),
-        ...reorderByLanguage(uncached.sort(sortBy(...sortUncached)), languages, debug, isAnime)
-      ].slice(0, maxTorrents);
+      cached.forEach(t => t._isCached = true);
+      uncached.forEach(t => t._isCached = false);
+
+      let combined = [...cached, ...uncached];
+
+      combined.forEach(t => {
+        let baseScore = calculateScore(t, languages, priorityKeywords, isAnime);
+        // Cache bonus keeps cached items above uncached items generally
+        if (t._isCached) baseScore += 1000;
+        
+        // Priority Keywords pierce the cache bubble
+        if (priorityKeywords && priorityKeywords.length > 0) {
+          const name = (t.name || '').toLowerCase();
+          for (const kw of priorityKeywords) {
+            if (name.includes(kw.toLowerCase())) {
+              baseScore += 2000;
+              break;
+            }
+          }
+        }
+        t._finalScore = baseScore;
+      });
+
+      combined.sort((a, b) => {
+        if (b._finalScore !== a._finalScore) return b._finalScore - a._finalScore;
+        return (b.seeders || 0) - (a.seeders || 0);
+      });
+
+      torrents = combined.slice(0, maxTorrents);
 
       console.log(`[${stremioId}] cache ${Date.now()-t0Cache}ms | cached=${cached.length} (debrid=${cached.length - viaSourceOnly} torznab=${viaSourceOnly}) uncached=${uncached.length} | final=${torrents.length}`);
     }
@@ -531,7 +596,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance) {
   }
 }
 
-function getFile(files, type, season, episode) {
+export function getFile(files, type, season, episode) {
   files = files.sort(sortBy('size', true));
   return type === 'movie'
     ? files[0]
@@ -546,7 +611,7 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
   const metaInfos = await getMetaInfos(type, stremioId, userConfig.metaLanguage);
   const torrents = await getTorrents(userConfig, metaInfos, debridInstance);
 
-  return torrents.map(t => {
+  return torrents.flatMap(t => {
     const file = getFile(t.infos.files || [], type, season, episode) || {};
     const fileSize = file.size || t.size || 0;
     const seeds = t.seeders || 0;
@@ -581,22 +646,32 @@ export async function getStreams(userConfig, type, stremioId, publicUrl) {
       return m ? m[1] : '';
     })();
 
-    const nameLine = `[${service}${cacheSign}] Jackio  ${resLabel}`;
-
     const titleParts = [
       [sizeLabel, seeds > 0 ? `🌱 ${seeds}` : ''].filter(Boolean).join('  '),
       tagsLine ? `📺 ${tagsLine}` : '',
       [`📡 ${t.indexerName || t.indexerId}`, langFlag, releaseGroup ? `🏷️ ${releaseGroup}` : ''].filter(Boolean).join('  '),
       `📋 ${file.name || t.name}`,
-    ].filter(Boolean);
+    ].filter(Boolean).join('\n');
 
-    return {
-      name: nameLine,
-      title: titleParts.join('\n'),
+    const debridStream = {
+      name: `[${service}${cacheSign}] Jackio  ${resLabel}`,
+      title: titleParts,
       url: t.disabled
         ? '#'
-        : `${publicUrl}/${btoa(JSON.stringify(userConfig))}/download/${type}/${stremioId}/${t.id}/${file.name || t.name}`
+        : `${publicUrl}/${btoa(JSON.stringify(userConfig))}/download/${type}/${stremioId}/${t.id}/${encodeURIComponent(file.name || t.name)}`
     };
+
+    const result = [debridStream];
+
+    if (isQbitConfigured() && !t.disabled) {
+      result.push({
+        name: `[QBIT] Jackio  ${resLabel}`,
+        title: titleParts,
+        url: `${publicUrl}/${btoa(JSON.stringify(userConfig))}/qbit/${type}/${stremioId}/${t.id}/${encodeURIComponent(file.name || t.name)}`
+      });
+    }
+
+    return result;
   });
 }
 

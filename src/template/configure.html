@@ -1,210 +1,386 @@
 <!doctype html>
-<html lang="es" data-bs-theme="dark">
+<html lang="pt-BR">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Jackettio</title>
+    <title>Jackio — Configuracao</title>
     <link rel="icon" href="/icon">
-    <link href="/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-      .container {
-        max-width: 600px;
+      *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+      :root{
+        --bg:#0b0f1a;--surface:#111827;--surface2:#1a2235;
+        --border:rgba(99,102,241,.18);--accent:#6366f1;--accent2:#8b5cf6;
+        --success:#10b981;--danger:#ef4444;--warning:#f59e0b;
+        --text:#e2e8f0;--muted:#64748b;--radius:12px;--radius-sm:8px;
+        --glow:0 0 40px rgba(99,102,241,.12);
       }
-      [v-cloak] { display: none; }
+      html{scroll-behavior:smooth}
+      body{
+        font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);
+        min-height:100vh;
+        background-image:
+          radial-gradient(ellipse 80% 50% at 20% -20%,rgba(99,102,241,.15) 0%,transparent 60%),
+          radial-gradient(ellipse 60% 40% at 80% 110%,rgba(139,92,246,.12) 0%,transparent 60%);
+      }
+      [v-cloak]{display:none}
+      .page{max-width:680px;margin:0 auto;padding:40px 20px 80px}
+      .header{display:flex;align-items:center;gap:16px;margin-bottom:36px}
+      .header-icon{
+        width:52px;height:52px;border-radius:14px;flex-shrink:0;
+        background:linear-gradient(135deg,var(--accent),var(--accent2));
+        display:flex;align-items:center;justify-content:center;font-size:24px;
+        box-shadow:0 8px 24px rgba(99,102,241,.35);
+      }
+      .header-title{font-size:1.7rem;font-weight:700;letter-spacing:-.5px;line-height:1.1}
+      .header-title span{font-size:.9rem;font-weight:400;color:var(--muted);display:block;margin-top:2px}
+      .card{
+        background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+        padding:28px;margin-bottom:16px;box-shadow:var(--glow);transition:border-color .2s;
+      }
+      .card:hover{border-color:rgba(99,102,241,.35)}
+      .section-title{
+        display:flex;align-items:center;gap:10px;font-size:.75rem;font-weight:600;
+        letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:20px;
+      }
+      .section-title::after{content:'';flex:1;height:1px;background:var(--border)}
+      .section-icon{
+        width:28px;height:28px;border-radius:7px;font-size:13px;
+        background:linear-gradient(135deg,rgba(99,102,241,.25),rgba(139,92,246,.15));
+        border:1px solid rgba(99,102,241,.25);display:flex;align-items:center;justify-content:center;
+      }
+      .field{margin-bottom:18px}
+      .field:last-child{margin-bottom:0}
+      label{display:block;font-size:.82rem;font-weight:500;color:#94a3b8;margin-bottom:6px}
+      input[type="text"],input[type="number"],input[type="password"],select{
+        width:100%;background:var(--surface2);border:1px solid var(--border);
+        border-radius:var(--radius-sm);color:var(--text);font-family:inherit;
+        font-size:.88rem;padding:9px 13px;outline:none;
+        transition:border-color .2s,box-shadow .2s;appearance:none;-webkit-appearance:none;
+      }
+      input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(99,102,241,.18)}
+      select{cursor:pointer}
+      select[multiple]{height:120px}
+      select option{background:var(--surface2);padding:4px}
+      .hint{font-size:.75rem;color:var(--muted);margin-top:5px;line-height:1.5}
+      .pill-group{display:flex;flex-wrap:wrap;gap:8px}
+      .pill{position:relative;display:inline-flex;align-items:center}
+      .pill input[type="checkbox"]{display:none}
+      .pill label{
+        cursor:pointer;margin:0;font-size:.8rem;font-weight:500;color:var(--muted);
+        background:var(--surface2);border:1px solid var(--border);border-radius:20px;
+        padding:5px 14px;transition:all .18s;user-select:none;
+      }
+      .pill input:checked+label{
+        color:#fff;background:linear-gradient(135deg,rgba(99,102,241,.35),rgba(139,92,246,.25));
+        border-color:rgba(99,102,241,.6);box-shadow:0 0 12px rgba(99,102,241,.2);
+      }
+      .toggle-row{
+        display:flex;align-items:flex-start;gap:14px;padding:12px 14px;
+        background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);
+        cursor:pointer;transition:border-color .2s;
+      }
+      .toggle-row:hover{border-color:rgba(99,102,241,.4)}
+      .toggle{position:relative;width:40px;height:22px;flex-shrink:0;margin-top:1px}
+      .toggle input{opacity:0;width:0;height:0}
+      .slider{
+        position:absolute;inset:0;background:var(--surface);border:1px solid var(--border);
+        border-radius:22px;transition:.2s;cursor:pointer;
+      }
+      .slider::before{
+        content:'';position:absolute;width:16px;height:16px;
+        left:2px;bottom:2px;background:var(--muted);border-radius:50%;transition:.2s;
+      }
+      .toggle input:checked+.slider{background:var(--accent);border-color:var(--accent)}
+      .toggle input:checked+.slider::before{transform:translateX(18px);background:#fff}
+      .toggle-label{flex:1}
+      .toggle-label strong{font-size:.88rem;font-weight:500;display:block}
+      .toggle-label span{font-size:.76rem;color:var(--muted);display:block;margin-top:2px;line-height:1.4}
+      .input-group{display:flex}
+      .input-group input{border-radius:var(--radius-sm) 0 0 var(--radius-sm)!important}
+      .input-group-btn{
+        background:var(--surface2);border:1px solid var(--border);border-left:none;
+        border-radius:0 var(--radius-sm) var(--radius-sm) 0;color:var(--muted);
+        cursor:pointer;padding:0 12px;font-size:15px;transition:color .2s;
+      }
+      .input-group-btn:hover{color:var(--text)}
+      .debrid-select-wrapper{position:relative}
+      .debrid-select-wrapper::after{
+        content:'v';position:absolute;right:13px;top:50%;transform:translateY(-50%);
+        color:var(--muted);pointer-events:none;font-size:12px;
+      }
+      .debrid-fields{
+        margin-top:14px;padding:16px;background:rgba(99,102,241,.05);
+        border:1px solid rgba(99,102,241,.18);border-radius:var(--radius-sm);
+        display:flex;flex-direction:column;gap:14px;
+      }
+      .alert{padding:12px 14px;border-radius:var(--radius-sm);font-size:.83rem;display:flex;align-items:flex-start;gap:10px}
+      .alert-warning{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);color:#fbbf24}
+      .btn-primary{
+        display:inline-flex;align-items:center;gap:8px;
+        background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border:none;
+        border-radius:var(--radius-sm);font-family:inherit;font-size:.88rem;font-weight:600;
+        padding:11px 24px;cursor:pointer;transition:opacity .2s,transform .15s,box-shadow .2s;
+        box-shadow:0 4px 16px rgba(99,102,241,.35);
+      }
+      .btn-primary:hover:not(:disabled){opacity:.92;transform:translateY(-1px);box-shadow:0 8px 24px rgba(99,102,241,.4)}
+      .btn-primary:disabled{opacity:.4;cursor:not-allowed}
+      .btn-success{
+        display:flex;align-items:center;justify-content:center;gap:8px;
+        background:linear-gradient(135deg,var(--success),#059669);color:#fff;border:none;
+        border-radius:var(--radius-sm);font-family:inherit;font-size:.88rem;font-weight:600;
+        padding:11px 20px;cursor:pointer;text-decoration:none;
+        transition:opacity .2s,transform .15s;box-shadow:0 4px 14px rgba(16,185,129,.3);
+      }
+      .btn-success:hover{opacity:.9;transform:translateY(-1px)}
+      .btn-copy{
+        background:var(--surface2);border:1px solid var(--border);border-left:none;
+        border-radius:0 var(--radius-sm) var(--radius-sm) 0;color:var(--muted);
+        font-family:inherit;font-size:.8rem;font-weight:500;padding:0 14px;
+        cursor:pointer;white-space:nowrap;transition:color .2s,background .2s;flex-shrink:0;
+      }
+      .btn-copy:hover{color:var(--text);background:rgba(99,102,241,.12)}
+      .result-box{
+        margin-top:20px;background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.25);
+        border-radius:var(--radius);padding:20px;animation:fadeIn .3s ease;
+      }
+      .result-box h6{color:var(--success);font-size:.85rem;font-weight:600;margin-bottom:14px;display:flex;align-items:center;gap:6px}
+      .result-actions{display:flex;flex-direction:column;gap:10px}
+      .result-url-row{display:flex}
+      .result-url-row input{border-radius:var(--radius-sm) 0 0 var(--radius-sm)!important;font-size:.78rem;color:var(--muted)}
+      .result-hint{font-size:.74rem;color:var(--muted)}
+      .error-msg{margin-top:10px;color:var(--danger);font-size:.82rem;display:flex;align-items:center;gap:6px}
+      a{color:var(--accent);text-decoration:none}
+      a:hover{text-decoration:underline}
+      @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+      ::-webkit-scrollbar{width:6px}
+      ::-webkit-scrollbar-track{background:var(--surface)}
+      ::-webkit-scrollbar-thumb{background:#334155;border-radius:3px}
     </style>
   </head>
   <body id="app">
-    <div class="container my-5" v-cloak>
-      <h1 class="mb-4">{{addon.name}} <span style="font-size:.6em">v{{addon.version}}</span></h1>
-      <form class="shadow p-3 bg-dark-subtle z-3 rounded">
-
-        <!-- welcome-message -->
-
-        <h5 class="mt-4">Indexadores</h5>
-        <div class="ps-2 border-start border-secondary-subtle">
-          <div class="mb-3 alert alert-warning" v-if="indexers.length == 0">
-            Não há indexadores disponíveis. Na instância do Jackett, parece que não está configurada corretamente.
-          </div>
-          <div class="mb-3" v-if="indexers.length >= 1 && !immulatableUserConfigKeys.includes('indexers')">
-            <label>Indexadores habilitados:</label>
-            <div class="d-flex flex-wrap">
-              <div v-for="indexer in indexers" class="me-3" :title="indexer.types.join(', ')">
-                <input class="form-check-input me-1" type="checkbox" v-model="indexer.checked" :id="indexer.label">
-                <label class="form-check-label" :for="indexer.label">{{indexer.label}}</label>
-              </div>
-            </div>
-          </div>
-          <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('indexerTimeoutSec')">
-            <label>Tempo de espera do indexador</label>
-            <input type="number" v-model="form.indexerTimeoutSec" min="6" max="120" class="form-control">
-            <small class="text-muted">Tempo máximo de execução em segundos antes do tempo limite.</small>
-          </div>
-          <div class="mb-3" v-if="passkey && passkey.enabled">
-            <label>Chave de acesso do indexador privado <i>(Recomendado)</i></label>
-            <small v-if="passkey.infoUrl" class="ms-2"><a :href="passkey.infoUrl" target="_blank" rel="noreferrer">Obtener aquí</a></small>
-            <input type="text" v-model="form.passkey" class="form-control" :pattern="passkey.pattern">
-            <small class="text-muted">Com a chave de acesso você Pode transmitir torrents em cache e sem cache; sem ou Passkey, apenas torrents em cache.</small>
+    <div class="page" v-cloak>
+      <div class="header">
+        <div class="header-icon">&#x26A1;</div>
+        <div>
+          <div class="header-title">
+            {{addon.name}}
+            <span>v{{addon.version}} &middot; Configuracao do Addon</span>
           </div>
         </div>
+      </div>
 
-        <h5 class="mt-4">Filtros e Ordenação</h5>
-        <div class="ps-2 border-start border-secondary-subtle">
-          <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('qualities')">
-            <label>Qualidades:</label>
-            <div class="d-flex flex-wrap">
-              <div v-for="quality in qualities" class="me-3">
-                <input class="form-check-input me-1" type="checkbox" v-model="quality.checked" :id="quality.label">
-                <label class="form-check-label" :for="quality.label">{{quality.label}}</label>
-              </div>
+      <div class="card">
+        <div class="section-title"><div class="section-icon">&#x1F50D;</div> Indexadores</div>
+        <div class="alert alert-warning field" v-if="indexers.length == 0">
+          &#x26A0;&#xFE0F; Nao ha indexadores disponiveis. A instancia do Jackett/Prowlarr parece nao estar configurada corretamente.
+        </div>
+        <div class="field" v-if="indexers.length >= 1 && !immulatableUserConfigKeys.includes('indexers')">
+          <label>Indexadores habilitados</label>
+          <div class="pill-group">
+            <div class="pill" v-for="indexer in indexers">
+              <input type="checkbox" v-model="indexer.checked" :id="'idx-'+indexer.label">
+              <label :for="'idx-'+indexer.label">{{indexer.label}}</label>
             </div>
           </div>
-          <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('excludeKeywords')">
-            <label>Excluir palavras-chave do nome do torrent</label>
-            <input type="text" v-model="form.excludeKeywords" placeholder="palavra1,palavra2" class="form-control">
-            <small class="text-muted">Ejemplo: cam,xvid</small>
-          </div>
-          <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('priorityKeywords')">
-            <label>Palavras-chave prioritárias no nome do arquivo</label>
-            <input type="text" v-model="form.priorityKeywords" placeholder="palavra1,palavra2" class="form-control">
-            <small class="text-muted">Torrents cujo nome contenha qualquer uma dessas palavras serão priorizados com o mesmo peso do idioma preferido. Ex: dual,dublado,pt-br</small>
-          </div>
-          <div class="mb-3 d-flex flex-row" v-if="!immulatableUserConfigKeys.includes('hideUncached')">
-            <div class="form-check form-switch">
-              <input class="form-check-input me-1" type="checkbox" v-model="form.hideUncached" id="hideUncached">
-              <label for="hideUncached" class="d-flex flex-column">
-                <span>Mostrar apenas torrents em cache</span>
-              </label>
+        </div>
+        <div class="field" v-if="!immulatableUserConfigKeys.includes('indexerTimeoutSec')">
+          <label>Tempo limite do indexador (segundos)</label>
+          <input type="number" v-model="form.indexerTimeoutSec" min="6" max="120">
+          <div class="hint">Tempo maximo de espera antes de encerrar a busca no indexador.</div>
+        </div>
+        <div class="field" v-if="passkey && passkey.enabled">
+          <label>Chave de acesso do indexador privado
+            <small v-if="passkey.infoUrl" style="margin-left:8px"><a :href="passkey.infoUrl" target="_blank" rel="noreferrer">Obter aqui</a></small>
+          </label>
+          <input type="text" v-model="form.passkey" :pattern="passkey.pattern">
+          <div class="hint">Com a chave de acesso voce pode transmitir torrents em cache e sem cache.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><div class="section-icon">&#x1F39B;&#xFE0F;</div> Filtros e Ordenacao</div>
+        <div class="field" v-if="!immulatableUserConfigKeys.includes('qualities')">
+          <label>Qualidades aceitas</label>
+          <div class="pill-group">
+            <div class="pill" v-for="quality in qualities">
+              <input type="checkbox" v-model="quality.checked" :id="'q-'+quality.label">
+              <label :for="'q-'+quality.label">{{quality.label}}</label>
             </div>
           </div>
-          <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('sortCached')">
-            <label>Ordenando torrents em cache</label>
-            <select v-model="form.sortCached" class="form-select">
+        </div>
+        <div class="field" v-if="!immulatableUserConfigKeys.includes('excludeKeywords')">
+          <label>Excluir palavras-chave do nome do torrent</label>
+          <input type="text" v-model="form.excludeKeywords" placeholder="cam,xvid,ts">
+          <div class="hint">Separe por virgula. Torrents com essas palavras serao removidos.</div>
+        </div>
+        <div class="field" v-if="!immulatableUserConfigKeys.includes('priorityKeywords')">
+          <label>Palavras-chave prioritarias</label>
+          <input type="text" v-model="form.priorityKeywords" placeholder="dual,dublado,pt-br">
+          <div class="hint">Torrents com essas palavras recebem prioridade maxima.</div>
+        </div>
+        <div class="field" v-if="!immulatableUserConfigKeys.includes('hideUncached')">
+          <label class="toggle-row" for="hideUncached" style="cursor:pointer;display:flex">
+            <label class="toggle" style="display:block;margin-bottom:0">
+              <input type="checkbox" v-model="form.hideUncached" id="hideUncached">
+              <span class="slider"></span>
+            </label>
+            <div class="toggle-label">
+              <strong>Apenas torrents em cache</strong>
+              <span>Oculta torrents sem cache imediato nos resultados</span>
+            </div>
+          </label>
+        </div>
+        <div class="field" v-if="!immulatableUserConfigKeys.includes('sortCached')">
+          <label>Ordenacao de torrents em cache</label>
+          <div class="debrid-select-wrapper">
+            <select v-model="form.sortCached">
               <option v-for="sort in sorts" :value="sort.value">{{sort.label}}</option>
             </select>
           </div>
-          <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('sortUncached') && !form.hideUncached">
-            <label>Ordenando torrents sem cache</label>
-            <select v-model="form.sortUncached" class="form-select">
+        </div>
+        <div class="field" v-if="!immulatableUserConfigKeys.includes('sortUncached') && !form.hideUncached">
+          <label>Ordenacao de torrents sem cache</label>
+          <div class="debrid-select-wrapper">
+            <select v-model="form.sortUncached">
               <option v-for="sort in sorts" :value="sort.value">{{sort.label}}</option>
             </select>
           </div>
-          <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('maxTorrents')">
-            <label>Número máximo de torrents pesquisados</label>
-            <input type="number" v-model="form.maxTorrents" min="1" max="30" class="form-control">
-            <small class="text-muted">Un número alto puede ralentizar significativamente la solicitud</small>
+        </div>
+        <div class="field" v-if="!immulatableUserConfigKeys.includes('maxTorrents')">
+          <label>Numero maximo de torrents pesquisados</label>
+          <input type="number" v-model="form.maxTorrents" min="1" max="30">
+          <div class="hint">Valores altos aumentam a cobertura, mas tornam a busca mais lenta.</div>
+        </div>
+        <div class="field" v-if="!immulatableUserConfigKeys.includes('priotizePackTorrents')">
+          <label>Forcar inclusao de N pacotes de series</label>
+          <input type="number" v-model="form.priotizePackTorrents" min="1" max="30">
+          <div class="hint">Aumenta a chance de encontrar torrents em cache. Valor recomendado: 2.</div>
+        </div>
+        <div class="field" v-if="!immulatableUserConfigKeys.includes('priotizeLanguages')">
+          <label>Priorizar idiomas de audio</label>
+          <div class="pill-group">
+            <div class="pill" v-for="language in languages">
+              <input type="checkbox" :id="'lang-'+language.value" v-model="language.checked">
+              <label :for="'lang-'+language.value">{{language.label}}</label>
+            </div>
           </div>
-          <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('priotizePackTorrents')">
-            <label>Forçar a inclusão de <small>n</small> pacotes de séries na pesquisa</label>
-            <input type="number" v-model="form.priotizePackTorrents" min="1" max="30" class="form-control">
-            <small class="text-muted">Isso pode aumentar a probabilidade de torrents em cache. 2 é um bom número</small>
-          </div>
-          <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('priotizeLanguages')">
-            <label>Priorizar idiomas de áudio</label>
-            <select v-model="form.priotizeLanguages" class="form-select" multiple>
-              <option v-for="language in languages" :value="language.value">{{language.label}}</option>
-            </select>
-          </div>
-          <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('metaLanguage') && metaLanguages.length > 0">
-            <label>Pesquisar idiomas</label>
-            <select v-model="form.metaLanguage" class="form-select">
+        </div>
+        <div class="field" v-if="!immulatableUserConfigKeys.includes('metaLanguage') && metaLanguages.length > 0">
+          <label>Idioma de pesquisa de metadados</label>
+          <div class="debrid-select-wrapper">
+            <select v-model="form.metaLanguage">
               <option v-for="metaLanguage in metaLanguages" :value="metaLanguage.value">{{metaLanguage.label}}</option>
             </select>
-            <small class="text-muted">Por padrão, a pesquisa usa o título original e funciona na maioria dos casos, mas você pode forçar a pesquisa a usar um idioma específico.</small>
           </div>
+          <div class="hint">Por padrao usa o titulo original. Altere para forcar um idioma especifico.</div>
         </div>
+      </div>
 
-        <h5 class="mt-4">Proveedor de Streaming</h5>
-        <div class="ps-2 border-start border-secondary-subtle">
-          <div class="mb-3 d-flex flex-row" v-if="!immulatableUserConfigKeys.includes('forceCacheNextEpisode')">
-            <div class="form-check form-switch">
-              <input class="form-check-input me-1" type="checkbox" v-model="form.forceCacheNextEpisode" id="forceCacheNextEpisode">
-              <label for="forceCacheNextEpisode" class="d-flex flex-column">
-                <span>Prepare o próximo episódio. (Recomendado)</span>
-                <small class="text-muted">Adiciona automaticamente o próximo episódio quando ele não estiver disponível para streaming imediato.</small>
-              </label>
+      <div class="card">
+        <div class="section-title"><div class="section-icon">&#x1F680;</div> Provedor de Streaming</div>
+        <div class="field" v-if="!immulatableUserConfigKeys.includes('forceCacheNextEpisode')">
+          <label class="toggle-row" for="forceCacheNextEpisode" style="cursor:pointer;display:flex">
+            <label class="toggle" style="display:block;margin-bottom:0">
+              <input type="checkbox" v-model="form.forceCacheNextEpisode" id="forceCacheNextEpisode">
+              <span class="slider"></span>
+            </label>
+            <div class="toggle-label">
+              <strong>Preparar proximo episodio</strong>
+              <span>Adiciona automaticamente o proximo episodio quando nao estiver disponivel. (Recomendado)</span>
             </div>
-          </div>
-          <div class="mb-3">
-            <label>Proveedor de streaming:</label>
-            <select v-model="debrid" class="form-select" @change="form.debridId = debrid.id">
+          </label>
+        </div>
+        <div class="field">
+          <label>Servico de Debrid</label>
+          <div class="debrid-select-wrapper">
+            <select v-model="debrid" @change="form.debridId = debrid.id">
               <option v-for="option in debrids" :value="option">{{ option.name }}</option>
             </select>
           </div>
-          <div v-for="field in debrid.configFields" class="mb-3">
-            <label>{{field.label}}:</label> 
-            <small v-if="field.href" class="ms-2"><a :href="field.href.value" target="_blank" rel="noreferrer">{{field.href.label}}</a></small>
-            <input type="{{field.type}}" v-model="field.value" class="form-control">
-          </div>
         </div>
-
-        <h5 class="mt-4">MediaFlow Proxy</h5>
-        <div class="ps-2 border-start border-secondary-subtle">
-          <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('enableMediaFlow')">
-            <div class="form-check form-switch">
-              <input class="form-check-input" type="checkbox" v-model="form.enableMediaFlow" id="enableMediaFlow">
-              <label class="form-check-label" for="enableMediaFlow">Habilitar MediaFlow Proxy</label>
-            </div>
-          </div>
-          <div v-if="form.enableMediaFlow">
-            <div class="mb-2">
-              <a href="https://github.com/mhdzumair/mediaflow-proxy?tab=readme-ov-file#mediaflow-proxy" target="_blank" rel="noopener">
-                Guia de Configuração do MediaFlow
-              </a>
-            </div>
-            <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('mediaflowProxyUrl')">
-              <label for="mediaflowProxyUrl">URL de MediaFlow Proxy:</label>
-              <input type="text" v-model="form.mediaflowProxyUrl" class="form-control" id="mediaflowProxyUrl" placeholder="https://tu-mediaflow-proxy-url.com">
-            </div>
-            <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('mediaflowApiPassword')">
-              <label for="mediaflowApiPassword">Senha da API do MediaFlow:</label>
-              <div class="input-group">
-                <input :type="showMediaFlowPassword ? 'text' : 'password'" v-model="form.mediaflowApiPassword" class="form-control" id="mediaflowApiPassword">
-                <button class="btn btn-outline-secondary" type="button" @click="toggleMediaFlowPassword">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-eye" viewBox="0 0 16 16" v-if="showMediaFlowPassword">
-                    <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8M1.173 8a13 13 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5s3.879 1.168 5.168 2.457A13 13 0 0 1 14.828 8q-.086.13-.195.288c-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5s-3.879-1.168-5.168-2.457A13 13 0 0 1 1.172 8z"/>
-                    <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0"/>
-                  </svg>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-eye-slash-fill" viewBox="0 0 16 16" v-else>
-                    <path d="m10.79 12.912-1.614-1.615a3.5 3.5 0 0 1-4.474-4.474l-2.06-2.06C.938 6.278 0 8 0 8s3 5.5 8 5.5a7 7 0 0 0 2.79-.588M5.21 3.088A7 7 0 0 1 8 2.5c5 0 8 5.5 8 5.5s-.939 1.721-2.641 3.238l-2.062-2.062a3.5 3.5 0 0 0-4.474-4.474z"/>
-                    <path d="M5.525 7.646a2.5 2.5 0 0 0 2.829 2.829zm4.95.708-2.829-2.83a2.5 2.5 0 0 1 2.829 2.829zm3.171 6-12-12 .708-.708 12 12z"/>
-                  </svg>
-                </button>
+        <div class="debrid-fields" v-if="debrid.configFields && debrid.configFields.length">
+          <template v-for="field in debrid.configFields">
+            <div class="field"
+              v-if="!field.showIf || debrid.configFields.find(f => f.name === field.showIf.field)?.value === field.showIf.value"
+              style="margin-bottom:0">
+              <label>{{field.label}}
+                <a v-if="field.href" :href="field.href.value" target="_blank" rel="noreferrer" style="font-size:.75rem;margin-left:8px">{{field.href.label}}</a>
+              </label>
+              <!-- Select com options -->
+              <div v-if="field.type === 'select'" class="debrid-select-wrapper">
+                <select v-model="field.value">
+                  <option value="">-- Selecione --</option>
+                  <option v-for="opt in field.options" :value="opt.value">{{opt.label}}</option>
+                </select>
               </div>
+              <!-- Input normal -->
+              <input v-else :type="field.type || 'text'" v-model="field.value" :placeholder="field.placeholder || ''">
             </div>
-            <div class="mb-3" v-if="!immulatableUserConfigKeys.includes('mediaflowPublicIp')">
-              <label for="mediaflowPublicIp">IP Pública de MediaFlow (Opcional):</label>
-              <input type="text" v-model="form.mediaflowPublicIp" class="form-control" id="mediaflowPublicIp" placeholder="Ingresa la dirección IP pública">
-              <small class="text-muted">
-                Configure esta opção somente se o MediaFlow estiver sendo executado localmente com um serviço proxy. Deixe em branco se o MediaFlow estiver configurado localmente sem um servidor proxy ou se estiver hospedado em um servidor remoto.
-              </small>
+          </template>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><div class="section-icon">&#x1F500;</div> MediaFlow Proxy</div>
+        <div class="field" v-if="!immulatableUserConfigKeys.includes('enableMediaFlow')">
+          <label class="toggle-row" for="enableMediaFlow" style="cursor:pointer;display:flex">
+            <label class="toggle" style="display:block;margin-bottom:0">
+              <input type="checkbox" v-model="form.enableMediaFlow" id="enableMediaFlow">
+              <span class="slider"></span>
+            </label>
+            <div class="toggle-label">
+              <strong>Habilitar MediaFlow Proxy</strong>
+              <span>Redireciona o trafego de midia atraves de um proxy para compatibilidade adicional.</span>
+            </div>
+          </label>
+        </div>
+        <div v-if="form.enableMediaFlow" style="margin-top:14px;display:flex;flex-direction:column;gap:14px">
+          <div>
+            <a href="https://github.com/mhdzumair/mediaflow-proxy?tab=readme-ov-file#mediaflow-proxy" target="_blank" rel="noopener" style="font-size:.82rem">
+              Guia de Configuracao do MediaFlow
+            </a>
+          </div>
+          <div class="field" v-if="!immulatableUserConfigKeys.includes('mediaflowProxyUrl')" style="margin:0">
+            <label>URL do MediaFlow Proxy</label>
+            <input type="text" v-model="form.mediaflowProxyUrl" placeholder="https://seu-mediaflow-proxy.com">
+          </div>
+          <div class="field" v-if="!immulatableUserConfigKeys.includes('mediaflowApiPassword')" style="margin:0">
+            <label>Senha da API do MediaFlow</label>
+            <div class="input-group">
+              <input :type="showMediaFlowPassword ? 'text' : 'password'" v-model="form.mediaflowApiPassword" placeholder="Senha da API">
+              <button class="input-group-btn" type="button" @click="toggleMediaFlowPassword">
+                <span v-if="showMediaFlowPassword">&#x1F648;</span>
+                <span v-else>&#x1F441;&#xFE0F;</span>
+              </button>
             </div>
           </div>
-        </div>
-
-        <div class="my-3">
-          <button @click="configure" type="button" class="btn btn-primary" :disabled="!debrid.id">{{isUpdate ? 'Actualizar' : 'Generar Configuración'}}</button>
-          <div v-if="error" class="text-danger mt-2">{{error}}</div>
-          
-          <div v-if="manifestUrl" class="mt-3 p-3 border border-success rounded">
-            <h6 class="text-success">✓ Configuración generada exitosamente</h6>
-            <div class="d-flex flex-column gap-2 mt-2">
-              <a :href="manifestUrl" class="btn btn-success">
-                🚀 Instalar no Stremio (Clique direto)
-              </a>
-              <div class="input-group">
-                <input type="text" :value="httpManifestUrl" class="form-control" readonly id="addonUrl">
-                <button class="btn btn-outline-secondary" type="button" @click="copyUrl">
-                  {{copied ? '✓ Copiado' : '📋 Copiar URL'}}
-                </button>
-              </div>
-              <small class="text-muted">
-                Você pode instalá-lo diretamente com o botão verde ou copiar o URL para instalá-lo manualmente no Stremio.
-              </small>
-            </div>
+          <div class="field" v-if="!immulatableUserConfigKeys.includes('mediaflowPublicIp')" style="margin:0">
+            <label>IP Publico do MediaFlow <small style="font-weight:400;color:var(--muted)">(Opcional)</small></label>
+            <input type="text" v-model="form.mediaflowPublicIp" placeholder="Ex: 203.0.113.5">
+            <div class="hint">Necessario somente se o MediaFlow estiver rodando localmente com proxy.</div>
           </div>
         </div>
+      </div>
 
-      </form>
+      <div class="card">
+        <button @click="configure" type="button" class="btn-primary" :disabled="!debrid.id">
+          <span>{{isUpdate ? 'Atualizar Configuracao' : 'Gerar Configuracao'}}</span>
+        </button>
+        <div v-if="error" class="error-msg">&#x274C; {{error}}</div>
+        <div v-if="manifestUrl" class="result-box">
+          <h6>&#x2705; Configuracao gerada com sucesso!</h6>
+          <div class="result-actions">
+            <a :href="manifestUrl" class="btn-success">Instalar no Stremio (clique direto)</a>
+            <div class="result-url-row">
+              <input type="text" :value="httpManifestUrl" readonly id="addonUrl">
+              <button class="btn-copy" type="button" @click="copyUrl">{{copied ? 'Copiado!' : 'Copiar URL'}}</button>
+            </div>
+            <div class="result-hint">Use o botao verde para instalacao direta ou copie a URL para instalar manualmente no Stremio.</div>
+          </div>
+        </div>
+      </div>
+
     </div>
 
     <script src="/js/vue.global.prod.js"></script>
@@ -213,9 +389,7 @@
       const { createApp, ref } = Vue
       createApp({
         setup() {
-
           const {addon, debrids, defaultUserConfig, qualities, languages, sorts, indexers, passkey, immulatableUserConfigKeys, metaLanguages} = config;
-
           const debrid = ref({});
           const error = ref('');
           const manifestUrl = ref('');
@@ -223,31 +397,23 @@
           const copied = ref(false);
           let isUpdate = false;
           const showMediaFlowPassword = ref(false);
-
-          function toggleMediaFlowPassword() {
-            showMediaFlowPassword.value = !showMediaFlowPassword.value;
-          }
-
+          function toggleMediaFlowPassword() { showMediaFlowPassword.value = !showMediaFlowPassword.value; }
           function copyUrl() {
             const urlInput = document.getElementById('addonUrl');
             urlInput.select();
             document.execCommand('copy');
             copied.value = true;
-            setTimeout(() => {
-              copied.value = false;
-            }, 2000);
+            setTimeout(() => { copied.value = false; }, 2000);
           }
-
           if(config.userConfig){
             try {
               const savedUserConfig = JSON.parse(atob(config.userConfig));
               Object.assign(defaultUserConfig, savedUserConfig);
-              debrid.value = debrids.find(debrid => debrid.id == savedUserConfig.debridId) || {};
+              debrid.value = debrids.find(d => d.id == savedUserConfig.debridId) || {};
               debrid.value.configFields.forEach(field => field.value = savedUserConfig[field.name] || null);
               isUpdate = true;
             }catch(err){}
           }
-
           const form = ref({
             maxTorrents: defaultUserConfig.maxTorrents,
             priotizePackTorrents: defaultUserConfig.priotizePackTorrents,
@@ -266,80 +432,48 @@
             mediaflowApiPassword: defaultUserConfig.mediaflowApiPassword,
             mediaflowPublicIp: defaultUserConfig.mediaflowPublicIp
           });
-
-          qualities.forEach(quality => quality.checked = defaultUserConfig.qualities.includes(quality.value));
-          indexers.forEach(indexer => indexer.checked = defaultUserConfig.indexers.includes(indexer.value) || defaultUserConfig.indexers.includes('all'));
-
+          qualities.forEach(q => q.checked = defaultUserConfig.qualities.includes(q.value));
+          indexers.forEach(i => i.checked = defaultUserConfig.indexers.includes(i.value) || defaultUserConfig.indexers.includes('all'));
+          languages.forEach(l => l.checked = (defaultUserConfig.priotizeLanguages || []).includes(l.value));
           async function configure(){
             try {
               error.value = '';
               const userConfig = Object.assign({}, form.value);
-              userConfig.qualities = qualities.filter(quality => quality.checked).map(quality => quality.value);
-              userConfig.indexers = indexers.filter(indexer => indexer.checked).map(indexer => indexer.value);
+              userConfig.qualities = qualities.filter(q => q.checked).map(q => q.value);
+              userConfig.indexers = indexers.filter(i => i.checked).map(i => i.value);
+              userConfig.priotizeLanguages = languages.filter(l => l.checked).map(l => l.value);
               userConfig.excludeKeywords = form.value.excludeKeywords.split(',').filter(Boolean);
               userConfig.priorityKeywords = form.value.priorityKeywords.split(',').map(s => s.trim()).filter(Boolean);
               debrid.value.configFields.forEach(field => {
-                if(field.required && !field.value)throw new Error(`${field.label} is required`);
-                userConfig[field.name] = field.value
+                // Verifica se campo esta visivel (showIf)
+                if (field.showIf) {
+                  const parent = debrid.value.configFields.find(f => f.name === field.showIf.field);
+                  if (!parent || parent.value !== field.showIf.value) return; // campo oculto: ignora
+                }
+                if(field.required && !field.value) throw new Error(field.label + ' e obrigatorio');
+                userConfig[field.name] = field.value;
               });
-
-              if(!userConfig.debridId){
-                throw new Error(`El proveedor de streaming es obligatorio`);
+              if(!userConfig.debridId) throw new Error('O provedor de streaming e obrigatorio');
+              if(!userConfig.qualities.length) throw new Error('Selecione ao menos uma qualidade');
+              if(!userConfig.indexers.length && indexers.length) throw new Error('Selecione ao menos um indexador');
+              if(passkey.enabled && userConfig.passkey && !userConfig.passkey.match(new RegExp(passkey.pattern)))
+                throw new Error('Formato de passkey invalido: ' + passkey.pattern);
+              if(userConfig.enableMediaFlow){
+                if(!userConfig.mediaflowProxyUrl) throw new Error('A URL do MediaFlow Proxy e obrigatoria');
+                if(!userConfig.mediaflowApiPassword) throw new Error('A senha da API do MediaFlow e obrigatoria');
               }
-
-              if(!userConfig.qualities.length){
-                throw new Error(`La calidad es obligatoria`);
-              }
-
-              if(!userConfig.indexers.length && indexers.length){
-                throw new Error(`El indexador es obligatorio`);
-              }
-
-              if(passkey.enabled){
-                if(userConfig.passkey && !userConfig.passkey.match(new RegExp(passkey.pattern))){
-                  throw new Error(`El passkey del tracker tiene un formato inválido: ${passkey.pattern}`);
-                }
-              }
-
-              // MediaFlow config validation
-              if (userConfig.enableMediaFlow) {
-                if (!userConfig.mediaflowProxyUrl) {
-                  throw new Error('La URL de MediaFlow Proxy es obligatoria cuando MediaFlow está habilitado');
-                }
-                if (!userConfig.mediaflowApiPassword) {
-                  throw new Error('La contraseña API de MediaFlow es obligatoria cuando MediaFlow está habilitado');
-                }
-              }
-
               const configBase64 = btoa(JSON.stringify(userConfig));
-              manifestUrl.value = `stremio://${document.location.host}/${configBase64}/manifest.json`;
-              httpManifestUrl.value = `${document.location.protocol}//${document.location.host}/${configBase64}/manifest.json`;
+              manifestUrl.value = 'stremio://' + document.location.host + '/' + configBase64 + '/manifest.json';
+              httpManifestUrl.value = document.location.protocol + '//' + document.location.host + '/' + configBase64 + '/manifest.json';
             }catch(err){
               error.value = err.message || err;
             }
           }
-
           return {
-            addon,
-            debrids,
-            debrid,
-            qualities,
-            sorts,
-            form,
-            configure,
-            error,
-            manifestUrl,
-            httpManifestUrl,
-            indexers,
-            passkey,
-            immulatableUserConfigKeys,
-            languages,
-            isUpdate,
-            metaLanguages,
-            showMediaFlowPassword,
-            toggleMediaFlowPassword,
-            copied,
-            copyUrl
+            addon, debrids, debrid, qualities, sorts, form, configure, error,
+            manifestUrl, httpManifestUrl, indexers, passkey, immulatableUserConfigKeys,
+            languages, isUpdate, metaLanguages, showMediaFlowPassword, toggleMediaFlowPassword,
+            copied, copyUrl
           }
         }
       }).mount('#app')

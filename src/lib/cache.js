@@ -78,5 +78,7 @@ async function del(key) {
 
 export default { get, set, del };
 
+export { client as redisClient };
+
 export async function clean() {}
 export async function vacuum() {}

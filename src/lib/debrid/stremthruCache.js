@@ -14,13 +14,13 @@
  *     "https://host/stremthru/torznab/api" → base "https://host"
  */
 
-import config from './config.js';
+import config from '../config.js';
 
 // ---------------------------------------------------------------------------
 // Configuração
 // ---------------------------------------------------------------------------
 
-const CHUNK_SIZE    = 500;   // hashes por requisição (limite recomendado pelo StremThru)
+const CHUNK_SIZE    = 100;   // hashes por requisição (reduzido para evitar URLs gigantes e timeouts)
 const CONCURRENCY   = 4;     // chunks simultâneos por store
 const TIMEOUT_MS    = 10_000;
 const MAX_RETRIES   = 2;
@@ -159,8 +159,8 @@ async function pLimit(tasks, limit) {
  * @param {string}   apiKey    - API key do serviço debrid do usuário (NÃO a do StremThru)
  * @returns {Promise<Set<string>>} Set de hashes cacheados (lowercase hex)
  */
-export async function checkCacheViaStremThru(hashes, store, apiKey) {
-  const base = getStremThruBase();
+export async function checkCacheViaStremThru(hashes, store, apiKey, baseUrl) {
+  const base = baseUrl || getStremThruBase();
   if (!base || !hashes.length || !apiKey) return new Set();
 
   const storeName = STORE_NAME_MAP[store] ?? store;

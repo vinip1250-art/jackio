@@ -7,6 +7,7 @@ import torbox from './debrid/torbox.js';
 import hybrid from './debrid/hybrid.js'; 
 import offcloud from './debrid/offcloud.js';
 import hybridoc from './debrid/hybrid-oc.js';
+import stremthru from './debrid/stremthru.js';
 
 export {ERROR} from './debrid/const.js';
 
@@ -20,6 +21,7 @@ const debrid = {
   hybrid,
   offcloud,
   hybridoc,
+  stremthru,
 };
 
 export function instance(userConfig){

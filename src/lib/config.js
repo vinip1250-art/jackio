@@ -122,15 +122,15 @@ export default {
     {value: 'italian',    emoji: '🇮🇹', iso639: 'it', pattern: 'ita(lian)?'},
     {value: 'lithuanian', emoji: '🇱🇹', iso639: 'lt', pattern: 'lithuanian'},
     {value: 'korean',     emoji: '🇰🇷', iso639: 'ko', pattern: 'korean'},
-    {value: 'portuguese', emoji: '🇵🇹', iso639: 'pt', pattern: 'portuguese'},
-    {value: 'brazilian', emoji: '🇧🇷', iso639: 'pt-br', pattern: 'portuguese'},
+    {value: 'portuguese', emoji: '🇵🇹', iso639: 'pt', pattern: '(portuguese|pt pt)'},
+    {value: 'brazilian', emoji: '🇧🇷', iso639: 'pt-br', pattern: '(pt br|ptbr|dublado|nacional|brazilian|portugues)'},
     {value: 'russian',    emoji: '🇷🇺', iso639: 'ru', pattern: 'rus(sian)?'},
     {value: 'swedish',    emoji: '🇸🇪', iso639: 'sv', pattern: 'swedish'},
     {value: 'tamil',      emoji: '🇮🇳', iso639: 'ta', pattern: 'tamil'},
     {value: 'turkish',    emoji: '🇹🇷', iso639: 'tr', pattern: 'turkish'}
   ].map(lang => {
     lang.label = `${lang.emoji} ${lang.value.charAt(0).toUpperCase() + lang.value.slice(1)}`;
-    lang.pattern = new RegExp(` ${lang.pattern} `, 'i');
+    lang.pattern = new RegExp(`\\b${lang.pattern}\\b`, 'i');
     return lang;
   })
 }
